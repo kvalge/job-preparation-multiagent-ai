@@ -34,6 +34,14 @@ def main() -> None:
     print(f"Matches: {result['key_matches']}")
     print(f"Gaps: {result['key_gaps']}")
 
+    if result["verdict"] == "poor_fit":
+        print("\n⚠️  This looks like a poor fit based on the analysis above.")
+
+    proceed = input("Continue with this job post? (y/n): ").strip().lower()
+    if proceed != "y":
+        print("Stopping here.")
+        return
+
 
 if __name__ == "__main__":
     main()
