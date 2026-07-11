@@ -12,11 +12,16 @@ Generic "what should I learn for role X" advice ignores the fact that every job 
 
 ```mermaid
 flowchart TD
-    CV["CV Input\n(LLM-friendly text)"]
-    JOB["Job Post Input\n(pasted text)"]
+    CV["CV Input\n(data/cv.txt)"]
+    JOB["Job Post Input\n(data/job_post.txt)"]
 
-    CV --> ASSESS
-    JOB --> ASSESS
+    CV --> MATCH
+    JOB --> MATCH
+
+    MATCH["Match Check Agent ✅ implemented\nEvaluates CV-job fit,\ndate-aware (in-progress vs completed),\nreturns good_fit / stretch_fit / poor_fit"]
+
+    MATCH -->|good_fit or stretch_fit| ASSESS
+    MATCH -->|poor_fit| STOP["User decides:\ncontinue anyway or drop this job post"]
 
     ASSESS["Assessment Agent\nAsks clarifying questions,\nevaluates current skill level,\nskips irrelevant questions gracefully"]
 
@@ -35,6 +40,8 @@ flowchart TD
     JOB --> STORE[("Job Post Records\ncompany, title, skills,\nsalary, remote/onsite, deadline")]
     STORE --> COMPARE["Comparison View\nRanks saved job posts by\nreadiness & deadline urgency"]
 
+    style MATCH fill:#d9ead3,stroke:#38761d
+    style STOP fill:#f4cccc,stroke:#cc0000
     style ASSESS fill:#e8f0fe,stroke:#4285f4
     style GAP fill:#fef7e0,stroke:#f9ab00
     style PLAN fill:#e6f4ea,stroke:#34a853
@@ -46,15 +53,16 @@ flowchart TD
 
 ## Agents
 
-| Agent | Responsibility |
-|---|---|
-| **Assessment Agent** | Asks only relevant clarifying questions (time available, learning style, deadline); if a question is skipped, makes a reasonable default decision instead of blocking the pipeline. May also probe CV claims against the job post to gauge real skill depth (e.g. "you list SQL — have you used window functions?"). |
-| **Gap Analysis Agent** | Compares CV against job requirements, grades skill level (not just yes/no), prioritizes gaps by importance and time-to-learn, and weighs this against days remaining until the application deadline. |
-| **Learning Plan Agent** | Turns prioritized gaps into a structured, sequenced study plan with milestones. |
-| **Resource-Finder Agent** | Uses web search to find current, real learning resources (courses, docs, YouTube) per topic — not hallucinated links. |
-| **CV Advisor Agent** | Recommends concrete CV edits where skill evidence is unclear or missing, tailored to the specific job post. |
-| **Motivation Letter Agent** | Drafts a tailored motivation letter using the CV, job post, and gap analysis as context. |
-| **Adjust / Replan Agent** | Reacts to two kinds of change: the user reports progress/struggle on a topic, or the user's constraints change (less time, new priority) — replans accordingly. |
+| Agent | Status | Responsibility |
+|---|---|---|
+| **Match Check Agent** | ✅ Implemented | First step: evaluates whether the CV is a realistic fit for the job post at all (`good_fit` / `stretch_fit` / `poor_fit`) before investing in deeper analysis. Date-aware, so in-progress or recently completed education/experience is judged correctly against today's date. |
+| **Assessment Agent** | Planned | Asks only relevant clarifying questions (time available, learning style, deadline); if a question is skipped, makes a reasonable default decision instead of blocking the pipeline. May also probe CV claims against the job post to gauge real skill depth (e.g. "you list SQL — have you used window functions?"). |
+| **Gap Analysis Agent** | Planned | Compares CV against job requirements, grades skill level (not just yes/no), prioritizes gaps by importance and time-to-learn, and weighs this against days remaining until the application deadline. |
+| **Learning Plan Agent** | Planned | Turns prioritized gaps into a structured, sequenced study plan with milestones. |
+| **Resource-Finder Agent** | Planned | Uses web search to find current, real learning resources (courses, docs, YouTube) per topic — not hallucinated links. |
+| **CV Advisor Agent** | Planned | Recommends concrete CV edits where skill evidence is unclear or missing, tailored to the specific job post. |
+| **Motivation Letter Agent** | Planned | Drafts a tailored motivation letter using the CV, job post, and gap analysis as context. |
+| **Adjust / Replan Agent** | Planned | Reacts to two kinds of change: the user reports progress/struggle on a topic, or the user's constraints change (less time, new priority) — replans accordingly. |
 
 Each "agent" is a distinct system prompt (and, where relevant, a distinct toolset) — not a separate service. Agents pass a shared state object between stages rather than maintaining independent conversation histories.
 
@@ -76,9 +84,14 @@ This is designed as a self-hosted, single-user tool, not a multi-tenant SaaS. Da
 
 ## Tech Stack
 
-- Python
-- OpenRouter API (OpenAI-compatible SDK)
-- *(add: storage — SQLite planned; web framework — TBD)*
+- **Language**: Python
+- **LLM access**: [OpenRouter](https://openrouter.ai/) — OpenAI-compatible API, used via the official `openai` Python SDK pointed at OpenRouter's base URL
+- **Model**: configurable via `.env` (`MODEL=`); currently using `nvidia/nemotron-3-ultra-550b-a55b:free` — a free-tier model on OpenRouter, chosen for its large context window (1M tokens) and design for multi-step/agentic workflows, which fits this project's multi-agent direction
+- **Config**: `python-dotenv` for environment variables (API key, model name)
+- **Storage**: local text files for now (`data/cv.txt`, `data/job_post.txt`); SQLite planned once multiple job post records and progress tracking are needed
+- **Frontend**: none yet (CLI only); Streamlit/Gradio or FastAPI planned
+
+> Note on the model: since it's a free-tier model, prompts/completions may be logged by the underlying inference provider to improve the model (varies by provider — see OpenRouter's per-model "Providers" tab). Fine for this personal/portfolio use; worth revisiting before using with more sensitive data.
 
 ## Setup
 
@@ -111,22 +124,33 @@ This is designed as a self-hosted, single-user tool, not a multi-tenant SaaS. Da
    pip install -r requirements.txt
    ```
 
-5. Run the project:
+5. Add your CV text to `data/cv.txt`, and the job posting text to `data/job_post.txt`. Edit these files directly (not via terminal paste — large pastes into some IDE consoles, e.g. PyCharm's Run panel, can silently drop lines).
+
+6. Run the project:
    ```bash
    python main.py
    ```
 
-> ⚠️ **Note:** The `.env` file contains sensitive credentials and should never be committed to Git. It's already included in `.gitignore`.
+> ⚠️ **Note:** The `.env` file contains sensitive credentials and should never be committed to Git. It's already included in `.gitignore`. `data/cv.txt` and `data/job_post.txt` contain personal data and are also excluded from version control.
 
 ## Usage
 
-*(add once CLI/UI is finalized: example flow — paste job post, paste CV, view generated plan)*
+Currently a CLI tool. On run, it reads your CV and the target job post from `data/`, then prints a fit verdict:
 
-## Roadmap
+```
+Verdict: stretch_fit
+Reasoning: ...
+Matches: [...]
+Gaps: [...]
+```
 
-- [x] Basic conversational agent with memory (prior prototype, carried into this project)
-- [ ] Job post input and structured extraction (company, title, skills, salary, deadline, etc.)
-- [ ] CV input (plain text first, file formats later)
+*(will expand as more agents are added: gap analysis, learning plan, resources, CV/letter suggestions)*
+
+- [x] CV input via file (`data/cv.txt`)
+- [x] Job post input via file (`data/job_post.txt`)
+- [x] Match Check Agent — evaluates CV-job fit before deeper analysis, date-aware
+- [ ] Job post structured extraction (company, title, skills, salary, deadline, etc.)
+- [ ] Handle `poor_fit` verdict: let user choose to continue anyway or stop
 - [ ] Assessment Agent with adaptive, skippable clarifying questions
 - [ ] Gap Analysis Agent with prioritization and deadline-awareness
 - [ ] Learning Plan Agent
@@ -144,8 +168,17 @@ This is designed as a self-hosted, single-user tool, not a multi-tenant SaaS. Da
 ```
 .
 ├── main.py
-├── agents/
+├── utils/
+│   ├── __init__.py
+│   └── date_utils.py          # get_today() — injects current date into agent prompts
 ├── data/
+│   ├── cv.py                  # load_cv / save_cv
+│   ├── job_post.py             # load_job_post / save_job_post
+│   ├── cv.txt                  # (gitignored)
+│   └── job_post.txt            # (gitignored)
+├── agents/
+│   ├── __init__.py
+│   └── match_check.py          # ✅ Match Check Agent
 ├── requirements.txt
 ├── .env.example
 ├── .gitignore

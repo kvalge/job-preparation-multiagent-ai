@@ -1,59 +1,38 @@
 from openai import OpenAI
-from openai.types.chat import (
-    ChatCompletionMessageParam,
-    ChatCompletionSystemMessageParam,
-    ChatCompletionUserMessageParam,
-    ChatCompletionAssistantMessageParam,
-)
 from dotenv import load_dotenv
 import os
 
+from data.cv import load_cv
+from data.job_post import load_job_post
+from agents.match_check import check_fit
+
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
-SYSTEM_PROMPT = "You are a helpful educational tutor."
-EXIT_COMMANDS = {"exit", "quit"}
 
 
 def main() -> None:
     load_dotenv()
     api_key = os.getenv("API_KEY")
     model = os.getenv("MODEL")
-
     if not api_key or not model:
         raise ValueError("API_KEY or MODEL not found — check your .env file")
 
     client = OpenAI(api_key=api_key, base_url=OPENROUTER_BASE_URL)
 
-    messages: list[ChatCompletionMessageParam] = [
-        ChatCompletionSystemMessageParam(role="system", content=SYSTEM_PROMPT)
-    ]
+    cv = load_cv()
+    if cv is None:
+        raise FileNotFoundError("No CV found. Paste your CV text into data/cv.txt and run again.")
 
-    while True:
-        question = input("You: ")
-        if question.lower() in EXIT_COMMANDS:
-            break
+    job_post = load_job_post()
+    if job_post is None:
+        raise FileNotFoundError("No job post found. Paste it into data/job_post.txt and run again.")
 
-        messages.append(
-            ChatCompletionUserMessageParam(role="user", content=question)
-        )
-        print("Thinking...\n")
+    print("\nEvaluating fit...\n")
+    result = check_fit(client, model, cv, job_post)
 
-        try:
-            response = client.chat.completions.create(
-                model=model,
-                messages=messages,
-            )
-        except Exception as error:
-            print(f"\nError: {error}\n")
-            messages.pop()  # drop the question we couldn't answer
-            continue
-
-        answer = response.choices[0].message.content or ""
-        messages.append(
-            ChatCompletionAssistantMessageParam(role="assistant", content=answer)
-        )
-
-        print("\nAI:", answer)
-        print("\n-------------------\n")
+    print(f"Verdict: {result['verdict']}")
+    print(f"Reasoning: {result['reasoning']}")
+    print(f"Matches: {result['key_matches']}")
+    print(f"Gaps: {result['key_gaps']}")
 
 
 if __name__ == "__main__":
