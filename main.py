@@ -4,8 +4,12 @@ import os
 
 from data.cv import load_cv
 from data.job_post import load_job_post
-from data.db import init_db, save_job_post
+from data.db import init_db, save_job_post, get_job_post
+from data.learning_plan import save_learning_plan
 from agents.match_check import check_fit
+from agents.gap_analysis import analyze_gaps
+from agents.learning_plan import create_learning_plan
+from utils.date_utils import days_until
 
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 
@@ -44,11 +48,48 @@ def main() -> None:
     status = "continued" if proceed == "y" else "declined"
 
     print("\nExtracting job post details and saving to database...\n")
-    save_job_post(client, model, job_post, result["verdict"], result["reasoning"], status)
+    job_post_id = save_job_post(
+        client, model, job_post, result["verdict"], result["reasoning"], status
+    )
 
     if status == "declined":
         print("Stopping here.")
         return
+
+    # CV isn't stored in the DB, so use the in-memory text; reuse the already-extracted
+    # deadline from the DB to avoid a second extraction call.
+    saved = get_job_post(job_post_id)
+    days_remaining = days_until(saved["job_post_deadline"] if saved else None)
+
+    print(f"\nAnalyzing skill gaps ({days_remaining} days until deadline)...\n")
+    gaps = analyze_gaps(client, model, cv, job_post, days_remaining)
+
+    print(f"Summary: {gaps['overall_summary']}\n")
+    print("Prioritized gaps:")
+    for gap in gaps["prioritized_gaps"]:
+        fit = "achievable" if gap["achievable_before_deadline"] else "tight"
+        print(
+            f"  {gap['priority']}. {gap['skill']} [{gap['importance']}] "
+            f"~{gap['estimated_days_to_learn']}d ({fit})"
+        )
+        print(f"     -> {gap['recommendation']}")
+
+    print("\nBuilding a study plan and searching for resources...\n")
+    plan = create_learning_plan(client, model, gaps, days_remaining)
+    plan_path = save_learning_plan(plan, job_post_id)
+
+    print(
+        f"Study plan ({plan['total_estimated_days']}d of {plan['days_remaining']}d "
+        f"available): {plan['feasibility_note']}\n"
+    )
+    for item in plan["items"]:
+        print(f"  {item['priority']}. {item['skill']} (~{item['estimated_days']}d)")
+        print(f"     What: {item['what']}")
+        print(f"     Why:  {item['why']}")
+        for res in item["resources"]:
+            print(f"       - {res['name']}: {res['link']}")
+
+    print(f"\nSaved learning plan to {plan_path}")
 
 
 if __name__ == "__main__":

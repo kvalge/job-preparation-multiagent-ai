@@ -1,5 +1,3 @@
-import json
-
 from openai import OpenAI
 from openai.types.chat import (
     ChatCompletionMessageParam,
@@ -8,6 +6,7 @@ from openai.types.chat import (
 )
 
 from utils.date_utils import get_today
+from utils.llm_json import parse_json_response
 
 MATCH_CHECK_SYSTEM_PROMPT = """You evaluate how well a candidate's CV fits a specific job posting.
 
@@ -44,6 +43,6 @@ def check_fit(client: OpenAI, model: str, cv: str, job_post: str) -> dict:
         model=model,
         messages=messages,
         temperature=0.2,
+        response_format={"type": "json_object"},
     )
-    raw = response.choices[0].message.content or "{}"
-    return json.loads(raw)
+    return parse_json_response(response, context="match check")

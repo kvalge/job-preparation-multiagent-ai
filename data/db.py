@@ -107,3 +107,23 @@ def save_job_post(
         conn.close()
 
     return job_post_id
+
+
+def get_job_post(job_post_id: int, path: str = DB_PATH) -> dict | None:
+    """Return a saved job post (with its skills) as a dict, or None if not found."""
+    conn = sqlite3.connect(path)
+    conn.row_factory = sqlite3.Row
+    try:
+        row = conn.execute(
+            "SELECT * FROM job_posts WHERE id = ?", (job_post_id,)
+        ).fetchone()
+        if row is None:
+            return None
+        record = dict(row)
+        skill_rows = conn.execute(
+            "SELECT skill FROM job_post_skills WHERE job_post_id = ?", (job_post_id,)
+        ).fetchall()
+        record["skills"] = [r["skill"] for r in skill_rows]
+        return record
+    finally:
+        conn.close()
