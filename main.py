@@ -4,7 +4,7 @@ import os
 
 from data.cv import load_cv
 from data.job_post import load_job_post
-from data.db import init_db
+from data.db import init_db, save_job_post
 from agents.match_check import check_fit
 
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
@@ -41,7 +41,12 @@ def main() -> None:
         print("\n⚠️  This looks like a poor fit based on the analysis above.")
 
     proceed = input("Continue with this job post? (y/n): ").strip().lower()
-    if proceed != "y":
+    status = "continued" if proceed == "y" else "declined"
+
+    print("\nExtracting job post details and saving to database...\n")
+    save_job_post(client, model, job_post, result["verdict"], result["reasoning"], status)
+
+    if status == "declined":
         print("Stopping here.")
         return
 
