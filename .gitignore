@@ -9,5 +9,4 @@ venv/
 
 data/cv.txt
 data/job_post.txt
-
-
+/data/jobs.db

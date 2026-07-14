@@ -4,6 +4,7 @@ import os
 
 from data.cv import load_cv
 from data.job_post import load_job_post
+from data.db import init_db
 from agents.match_check import check_fit
 
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
@@ -25,6 +26,8 @@ def main() -> None:
     job_post = load_job_post()
     if job_post is None:
         raise FileNotFoundError("No job post found. Paste it into data/job_post.txt and run again.")
+
+    init_db()
 
     print("\nEvaluating fit...\n")
     result = check_fit(client, model, cv, job_post)
