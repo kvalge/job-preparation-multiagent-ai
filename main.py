@@ -7,10 +7,12 @@ from data.cv import load_cv, save_revised_cv
 from data.job_post import load_job_post
 from data.db import init_db, save_job_post, get_job_post
 from data.learning_plan import save_learning_plan
+from data.motivation_letter import save_motivation_letter
 from agents.match_check import check_fit
 from agents.gap_analysis import analyze_gaps
 from agents.learning_plan import create_learning_plan
 from agents.cv_advisor_agent import advise_cv
+from agents.motivation_letter_agent import create_motivation_letter
 from utils.date_utils import days_until
 
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
@@ -146,6 +148,15 @@ def main() -> None:
             print(f"  - [{rec['section']}] {rec['change']}")
             print(f"     Why: {rec['why']}")
         print(f"\nSaved tailored CV to {cv_path}")
+
+    print("\nWriting a motivation letter...\n")
+    letter = run_stage(
+        "Motivation letter", create_motivation_letter, client, model, cv, job_post
+    )
+    if letter is not None:
+        letter_path = save_motivation_letter(letter["motivation_letter"], job_post_id)
+        print(letter["motivation_letter"])
+        print(f"\nSaved motivation letter to {letter_path}")
 
 
 if __name__ == "__main__":
