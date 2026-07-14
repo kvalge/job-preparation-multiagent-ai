@@ -5,6 +5,8 @@ from openai.types.chat import (
     ChatCompletionUserMessageParam,
 )
 
+from openai.types.shared_params import ResponseFormatJSONObject
+
 from utils.date_utils import get_today
 from utils.llm_json import parse_json_response
 
@@ -84,6 +86,6 @@ def analyze_gaps(
         model=model,
         messages=messages,
         temperature=0.2,
-        response_format={"type": "json_object"},
+        response_format=ResponseFormatJSONObject(type="json_object"),
     )
     return parse_json_response(response, context="gap analysis")

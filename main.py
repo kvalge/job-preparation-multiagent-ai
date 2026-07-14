@@ -1,17 +1,49 @@
 from openai import OpenAI
 from dotenv import load_dotenv
 import os
+from typing import Callable, TypeVar
 
-from data.cv import load_cv
+from data.cv import load_cv, save_revised_cv
 from data.job_post import load_job_post
 from data.db import init_db, save_job_post, get_job_post
 from data.learning_plan import save_learning_plan
 from agents.match_check import check_fit
 from agents.gap_analysis import analyze_gaps
 from agents.learning_plan import create_learning_plan
+from agents.cv_advisor_agent import advise_cv
 from utils.date_utils import days_until
 
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+
+T = TypeVar("T")
+
+
+def resolve_web_search() -> bool:
+    """Let the user enable/disable web search before the run.
+
+    Defaults to the ENABLE_WEB_SEARCH env var (off by default, since free models have
+    no credits for paid search) and lets the user override it interactively.
+    """
+    default = os.getenv("ENABLE_WEB_SEARCH", "false").strip().lower() in ("1", "true", "yes")
+    hint = "Y/n" if default else "y/N"
+    answer = input(
+        f"Enable web search for study resources? Requires OpenRouter credits [{hint}]: "
+    ).strip().lower()
+    if not answer:
+        return default
+    return answer in ("y", "yes")
+
+
+def run_stage(name: str, func: Callable[..., T], *args, **kwargs) -> T | None:
+    """Run a pipeline stage, returning None (instead of crashing) on failure.
+
+    Keeps earlier results/DB writes intact if a later agent fails.
+    """
+    try:
+        return func(*args, **kwargs)
+    except Exception as e:
+        print(f"\n⚠️  {name} failed: {e}\n   Skipping this step and continuing.")
+        return None
 
 
 def main() -> None:
@@ -32,9 +64,13 @@ def main() -> None:
         raise FileNotFoundError("No job post found. Paste it into data/job_post.txt and run again.")
 
     init_db()
+    use_web_search = resolve_web_search()
 
     print("\nEvaluating fit...\n")
-    result = check_fit(client, model, cv, job_post)
+    result = run_stage("Fit evaluation", check_fit, client, model, cv, job_post)
+    if result is None:
+        print("Cannot continue without a fit evaluation. Stopping.")
+        return
 
     print(f"Verdict: {result['verdict']}")
     print(f"Reasoning: {result['reasoning']}")
@@ -48,9 +84,14 @@ def main() -> None:
     status = "continued" if proceed == "y" else "declined"
 
     print("\nExtracting job post details and saving to database...\n")
-    job_post_id = save_job_post(
-        client, model, job_post, result["verdict"], result["reasoning"], status
+    job_post_id = run_stage(
+        "Saving job post",
+        save_job_post,
+        client, model, job_post, result["verdict"], result["reasoning"], status,
     )
+    if job_post_id is None:
+        print("Could not save the job post. Stopping.")
+        return
 
     if status == "declined":
         print("Stopping here.")
@@ -62,34 +103,49 @@ def main() -> None:
     days_remaining = days_until(saved["job_post_deadline"] if saved else None)
 
     print(f"\nAnalyzing skill gaps ({days_remaining} days until deadline)...\n")
-    gaps = analyze_gaps(client, model, cv, job_post, days_remaining)
-
-    print(f"Summary: {gaps['overall_summary']}\n")
-    print("Prioritized gaps:")
-    for gap in gaps["prioritized_gaps"]:
-        fit = "achievable" if gap["achievable_before_deadline"] else "tight"
-        print(
-            f"  {gap['priority']}. {gap['skill']} [{gap['importance']}] "
-            f"~{gap['estimated_days_to_learn']}d ({fit})"
-        )
-        print(f"     -> {gap['recommendation']}")
-
-    print("\nBuilding a study plan and searching for resources...\n")
-    plan = create_learning_plan(client, model, gaps, days_remaining)
-    plan_path = save_learning_plan(plan, job_post_id)
-
-    print(
-        f"Study plan ({plan['total_estimated_days']}d of {plan['days_remaining']}d "
-        f"available): {plan['feasibility_note']}\n"
+    gaps = run_stage(
+        "Gap analysis", analyze_gaps, client, model, cv, job_post, days_remaining
     )
-    for item in plan["items"]:
-        print(f"  {item['priority']}. {item['skill']} (~{item['estimated_days']}d)")
-        print(f"     What: {item['what']}")
-        print(f"     Why:  {item['why']}")
-        for res in item["resources"]:
-            print(f"       - {res['name']}: {res['link']}")
+    if gaps is not None:
+        print(f"Summary: {gaps['overall_summary']}\n")
+        print("Prioritized gaps:")
+        for gap in gaps["prioritized_gaps"]:
+            fit = "achievable" if gap["achievable_before_deadline"] else "tight"
+            print(
+                f"  {gap['priority']}. {gap['skill']} [{gap['importance']}] "
+                f"~{gap['estimated_days_to_learn']}d ({fit})"
+            )
+            print(f"     -> {gap['recommendation']}")
 
-    print(f"\nSaved learning plan to {plan_path}")
+        print("\nBuilding a study plan...\n")
+        plan = run_stage(
+            "Learning plan",
+            create_learning_plan,
+            client, model, gaps, days_remaining, use_web_search,
+        )
+        if plan is not None:
+            plan_path = save_learning_plan(plan, job_post_id)
+            print(
+                f"Study plan ({plan['total_estimated_days']}d of "
+                f"{plan['days_remaining']}d available): {plan['feasibility_note']}\n"
+            )
+            for item in plan["items"]:
+                print(f"  {item['priority']}. {item['skill']} (~{item['estimated_days']}d)")
+                print(f"     What: {item['what']}")
+                print(f"     Why:  {item['why']}")
+                for res in item["resources"]:
+                    print(f"       - {res['name']}: {res['link']}")
+            print(f"\nSaved learning plan to {plan_path}")
+
+    print("\nTailoring your CV to this job post...\n")
+    advice = run_stage("CV tailoring", advise_cv, client, model, cv, job_post)
+    if advice is not None:
+        cv_path = save_revised_cv(advice["revised_cv"], job_post_id)
+        print("CV recommendations:")
+        for rec in advice["recommendations"]:
+            print(f"  - [{rec['section']}] {rec['change']}")
+            print(f"     Why: {rec['why']}")
+        print(f"\nSaved tailored CV to {cv_path}")
 
 
 if __name__ == "__main__":

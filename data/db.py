@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import sqlite3
@@ -29,10 +30,15 @@ def init_db(path: str = DB_PATH) -> None:
                 date_saved TEXT,
                 match_verdict TEXT,
                 match_reasoning TEXT,
-                status TEXT
+                status TEXT,
+                content_hash TEXT
             )
             """
         )
+        # Migrate databases created before content_hash existed.
+        columns = [row[1] for row in conn.execute("PRAGMA table_info(job_posts)")]
+        if "content_hash" not in columns:
+            conn.execute("ALTER TABLE job_posts ADD COLUMN content_hash TEXT")
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS job_post_skills (
@@ -44,6 +50,23 @@ def init_db(path: str = DB_PATH) -> None:
             """
         )
         conn.commit()
+    finally:
+        conn.close()
+
+
+def _hash_job_post(job_post: str) -> str:
+    """Stable content hash of a job post, used to detect duplicates."""
+    return hashlib.sha256(job_post.strip().encode("utf-8")).hexdigest()
+
+
+def find_job_post_by_hash(content_hash: str, path: str = DB_PATH) -> int | None:
+    """Return the id of an existing job post with this content hash, or None."""
+    conn = sqlite3.connect(path)
+    try:
+        row = conn.execute(
+            "SELECT id FROM job_posts WHERE content_hash = ?", (content_hash,)
+        ).fetchone()
+        return row[0] if row else None
     finally:
         conn.close()
 
@@ -62,7 +85,16 @@ def save_job_post(
     Uses the extraction agent to pull structured fields from the raw job post text,
     then inserts one row into job_posts and one row per skill into job_post_skills.
     Returns the new job_posts.id.
+
+    If an identical job post was already saved, its existing id is returned without
+    re-extracting or re-inserting (avoids duplicate rows and a wasted LLM call).
     """
+    content_hash = _hash_job_post(job_post)
+    existing_id = find_job_post_by_hash(content_hash, path)
+    if existing_id is not None:
+        print(f"  (This job post is already saved as id {existing_id}; skipping re-save.)")
+        return existing_id
+
     fields = extract_job_post(client, model, job_post)
 
     disclaimers = fields.get("disclaimers")
@@ -76,9 +108,10 @@ def save_job_post(
             """
             INSERT INTO job_posts (
                 company, job_title, salary, location_type, job_post_deadline,
-                disclaimers, summary, date_saved, match_verdict, match_reasoning, status
+                disclaimers, summary, date_saved, match_verdict, match_reasoning,
+                status, content_hash
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 fields.get("company"),
@@ -92,6 +125,7 @@ def save_job_post(
                 match_verdict,
                 match_reasoning,
                 status,
+                content_hash,
             ),
         )
         job_post_id = cursor.lastrowid
