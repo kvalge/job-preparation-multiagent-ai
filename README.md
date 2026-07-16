@@ -106,8 +106,9 @@ This is designed as a self-hosted, single-user tool, not a multi-tenant SaaS. Da
 - **Web search**: optional, via OpenRouter's web plugin (used only by the Learning Plan Agent). Off by default because it requires OpenRouter credits; toggled per run or via `ENABLE_WEB_SEARCH` in `.env`.
 - **Config**: `python-dotenv` for environment variables
 - **Storage**: local SQLite (`data/jobs.db`) for job post records; text/markdown/JSON files under `data/` for CV input, archived postings, and generated outputs
+- **Entry point**: `run.py` — a single launcher that runs either the web UI or the CLI (`python run.py [ui|cli]`).
 - **Frontend**: Streamlit web UI (`app.py`) — manage your CV, add/save multiple job posts, and run the full analysis pipeline on any saved post with per-run toggles and download buttons. The CLI (`main.py`) remains available.
-- **Architecture**: shared logic lives in a `services/` layer so the CLI and UI reuse the same orchestration (`services/job_post_service.py` for saving, `services/analysis_service.py` for the pipeline, `services/cv_service.py` for CV versioning); `data/` modules are thin persistence helpers and `agents/` are pure LLM calls.
+- **Architecture**: front-ends are thin. `config.py` is the single source of LLM/client config; a `services/` layer holds all shared orchestration (`job_post_service` for saving, `analysis_service` for the pipeline, `cv_service` for CV versioning) reused by both CLI and UI; `data/` modules are thin persistence helpers, `agents/` are pure LLM calls, and `utils/` holds cross-cutting helpers. No pipeline logic is duplicated between the CLI and UI.
 
 > Note on free models: prompts/completions may be logged by the underlying inference provider (varies per provider — see OpenRouter's per-model "Providers" tab). Fine for this personal/portfolio use; worth revisiting before using with more sensitive data. Free models are also less reliable at strict JSON output, which is why parsing is defensive.
 
@@ -143,21 +144,25 @@ This is designed as a self-hosted, single-user tool, not a multi-tenant SaaS. Da
    pip install -r requirements.txt
    ```
 
-5. Add your CV text to `data/cv.txt`, and the job posting text to `data/job_post.txt`. Edit these files directly (not via terminal paste — large pastes into some IDE consoles, e.g. PyCharm's Run panel, can silently drop lines).
+5. For the CLI only, add your CV text to `data/cv.txt` and the job posting text to `data/job_post.txt`. Edit these files directly (not via terminal paste — large pastes into some IDE consoles, e.g. PyCharm's Run panel, can silently drop lines). The web UI takes these inputs directly, so this step isn't needed for the UI.
 
-6. Run the project:
+6. Run the project (single entry point — choose UI or CLI):
    ```bash
-   python main.py
+   python run.py          # prompts you to choose Web UI or CLI
+   python run.py ui       # launch the Streamlit web UI directly
+   python run.py cli      # run the CLI directly
    ```
 
 > ⚠️ **Note:** `.env` contains sensitive credentials and is git-ignored. `data/cv.txt`, `data/job_post.txt`, `data/job_posts/`, `data/jobs.db`, and the generated output folders contain personal data and are also excluded from version control.
 
 ## Usage
 
+`run.py` is the single entry point; it launches either the web UI or the CLI. Both share the same backend (config, services, agents, data layers) — the only difference is the front-end.
+
 ### Web UI (Streamlit)
 
 ```bash
-streamlit run app.py
+python run.py ui        # or: streamlit run app.py
 ```
 
 The UI lets you:
@@ -167,9 +172,15 @@ The UI lets you:
 - Select any saved post and **run the full pipeline** (fit → gap → learning plan → CV → letter), with per-run toggles for **web search** (default off) and **proceed even if poor fit** (default on).
 - View results inline and **download** the learning plan, tailored CV, and motivation letter. Each analysis shows which CV version it ran against.
 
+When you launch the UI via `python run.py ui`, the terminal also logs pipeline progress and a final "Analysis complete" line once a UI run finishes.
+
 ### CLI
 
-A CLI tool. On run it reads your CV and the target job post from `data/`, asks whether to enable web search, then walks the pipeline:
+```bash
+python run.py cli       # or: python main.py
+```
+
+On run it reads your CV and the target job post from `data/`, asks whether to enable web search, then walks the pipeline:
 
 1. **Extracts and saves** the job post to SQLite (skipped if an identical post was already saved) and snapshots the current CV version.
 2. **Fit verdict** (`good_fit` / `stretch_fit` / `poor_fit`) with reasoning, matches, and gaps. By default it proceeds even on `poor_fit`.
@@ -212,8 +223,10 @@ Gaps: [...]
 
 ```
 .
-├── main.py                          # CLI orchestration + resilient pipeline
-├── app.py                           # Streamlit web UI
+├── run.py                           # single entry point — choose UI or CLI
+├── config.py                        # shared LLM client/config (env, base URL)
+├── main.py                          # CLI front-end (run_cli)
+├── app.py                           # Streamlit web UI front-end
 ├── agents/
 │   ├── match_check.py               # ✅ Match Check Agent
 │   ├── job_post_extraction.py       # ✅ Job Post Extraction Agent

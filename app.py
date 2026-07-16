@@ -2,28 +2,23 @@ import json
 import os
 
 import streamlit as st
-from dotenv import load_dotenv
-from openai import OpenAI
 
+from config import create_client, web_search_enabled_default
 from data.cv import load_cv
 from data.db import get_cv_version, get_job_post, init_db, list_job_posts
 from services.analysis_service import run_analysis
 from services.cv_service import ensure_cv_version, save_cv_with_version
 from services.job_post_service import add_job_post
 
-OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
-
 st.set_page_config(page_title="Job Preparation Multiagent AI", page_icon="🧭")
 
-load_dotenv()
 init_db()
 st.session_state.setdefault("analysis", {})
 
-api_key = os.getenv("API_KEY")
-model = os.getenv("MODEL")
-client = (
-    OpenAI(api_key=api_key, base_url=OPENROUTER_BASE_URL) if api_key and model else None
-)
+try:
+    client, model = create_client()
+except ValueError:
+    client, model = None, None
 
 st.title("Job Preparation Multiagent AI")
 st.caption(
@@ -63,7 +58,7 @@ st.caption(
     "separately, and identical postings are detected and skipped."
 )
 
-if client is None:
+if client is None or model is None:
     st.error("Set API_KEY and MODEL in your .env file to add and analyze job posts.")
 else:
     with st.form("add_job_post", clear_on_submit=True):
@@ -217,7 +212,7 @@ def _render_results(results: dict) -> None:
             )
 
 
-if posts and client is not None:
+if posts and client is not None and model is not None:
     st.header("Analyze a job post")
 
     selected = st.selectbox(
@@ -237,7 +232,9 @@ if posts and client is not None:
 
     col_a, col_b = st.columns(2)
     with col_a:
-        use_web_search = st.toggle("Use web search for resources", value=False)
+        use_web_search = st.toggle(
+            "Use web search for resources", value=web_search_enabled_default()
+        )
     with col_b:
         proceed_on_poor_fit = st.toggle("Proceed even if poor fit", value=True)
 
@@ -259,6 +256,11 @@ if posts and client is not None:
                         proceed_on_poor_fit=proceed_on_poor_fit,
                     )
                     st.session_state["analysis"][post_id] = results
+                    label = _post_label(detail)
+                    print(
+                        f"[ui] Analysis complete for {label} "
+                        f"(status={results.get('status')}). Results shown in the browser."
+                    )
                 except Exception as e:
                     st.error(f"Analysis failed: {e}")
 

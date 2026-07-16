@@ -1,7 +1,4 @@
-from openai import OpenAI
-from dotenv import load_dotenv
-import os
-
+from config import create_client, web_search_enabled_default
 from data.cv import load_cv
 from data.job_post import load_job_post
 from data.db import init_db
@@ -10,8 +7,6 @@ from services.job_post_service import add_job_post
 from services.analysis_service import run_analysis
 from utils.pipeline import run_stage
 
-OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
-
 
 def resolve_web_search() -> bool:
     """Let the user enable/disable web search before the run.
@@ -19,7 +14,7 @@ def resolve_web_search() -> bool:
     Defaults to the ENABLE_WEB_SEARCH env var (off by default, since free models have
     no credits for paid search) and lets the user override it interactively.
     """
-    default = os.getenv("ENABLE_WEB_SEARCH", "false").strip().lower() in ("1", "true", "yes")
+    default = web_search_enabled_default()
     hint = "Y/n" if default else "y/N"
     answer = input(
         f"Enable web search for study resources? Requires OpenRouter credits [{hint}]: "
@@ -29,14 +24,8 @@ def resolve_web_search() -> bool:
     return answer in ("y", "yes")
 
 
-def main() -> None:
-    load_dotenv()
-    api_key = os.getenv("API_KEY")
-    model = os.getenv("MODEL")
-    if not api_key or not model:
-        raise ValueError("API_KEY or MODEL not found — check your .env file")
-
-    client = OpenAI(api_key=api_key, base_url=OPENROUTER_BASE_URL)
+def run_cli() -> None:
+    client, model = create_client()
 
     cv = load_cv()
     if cv is None:
@@ -116,4 +105,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    run_cli()
