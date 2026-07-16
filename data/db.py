@@ -343,3 +343,68 @@ def get_latest_ranking(path: str = DB_PATH) -> dict | None:
         return dict(row) if row else None
     finally:
         conn.close()
+
+
+def count_job_posts(path: str = DB_PATH) -> int:
+    """Return the total number of saved job posts."""
+    conn = sqlite3.connect(path)
+    try:
+        row = conn.execute("SELECT COUNT(*) FROM job_posts").fetchone()
+        return int(row[0]) if row else 0
+    finally:
+        conn.close()
+
+
+def count_by_field(field: str, path: str = DB_PATH) -> list[tuple[str, int]]:
+    """Count job posts grouped by a text column (e.g. company, job_title).
+
+    Empty/null values are grouped as '(unknown)'. Returns (label, count) pairs
+    ordered by count descending.
+    """
+    if field not in ("company", "job_title"):
+        raise ValueError(f"Unsupported field for counting: {field!r}")
+    conn = sqlite3.connect(path)
+    try:
+        rows = conn.execute(
+            f"""
+            SELECT
+                COALESCE(NULLIF(TRIM({field}), ''), '(unknown)') AS label,
+                COUNT(*) AS cnt
+            FROM job_posts
+            GROUP BY label
+            ORDER BY cnt DESC, label ASC
+            """
+        ).fetchall()
+        return [(str(r[0]), int(r[1])) for r in rows]
+    finally:
+        conn.close()
+
+
+def count_skills(path: str = DB_PATH) -> list[tuple[str, int]]:
+    """Count how many job posts list each skill (case-insensitive).
+
+    Display label is the most common original casing. Ordered by count descending.
+    """
+    conn = sqlite3.connect(path)
+    try:
+        rows = conn.execute(
+            """
+            SELECT
+                (
+                    SELECT s2.skill
+                    FROM job_post_skills s2
+                    WHERE LOWER(TRIM(s2.skill)) = LOWER(TRIM(s1.skill))
+                    GROUP BY s2.skill
+                    ORDER BY COUNT(*) DESC, s2.skill ASC
+                    LIMIT 1
+                ) AS label,
+                COUNT(DISTINCT s1.job_post_id) AS cnt
+            FROM job_post_skills s1
+            WHERE s1.skill IS NOT NULL AND TRIM(s1.skill) != ''
+            GROUP BY LOWER(TRIM(s1.skill))
+            ORDER BY cnt DESC, label ASC
+            """
+        ).fetchall()
+        return [(str(r[0]), int(r[1])) for r in rows]
+    finally:
+        conn.close()

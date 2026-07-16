@@ -13,6 +13,12 @@ from data.db import get_job_post, update_job_post_analysis, update_job_post_summ
 from data.learning_plan import save_learning_plan
 from data.motivation_letter import save_motivation_letter
 from services.ranking_service import refresh_ranking
+from services.statistics_service import (
+    DEFAULT_TOP_COMPANIES,
+    DEFAULT_TOP_SKILLS,
+    DEFAULT_TOP_TITLES,
+    refresh_statistics,
+)
 from utils.date_utils import days_until, get_today
 from utils.pipeline import run_stage
 from utils.text_utils import output_stem
@@ -74,13 +80,16 @@ def run_analysis(
     *,
     use_web_search: bool = False,
     proceed_on_poor_fit: bool = True,
+    top_companies: int = DEFAULT_TOP_COMPANIES,
+    top_titles: int = DEFAULT_TOP_TITLES,
+    top_skills: int = DEFAULT_TOP_SKILLS,
 ) -> dict:
     """Run the full analysis pipeline on a saved job post and return structured results.
 
     Stages: fit → (record) → gap → learning plan → CV advisor → motivation letter →
-    cross-post ranking. Resilient: a failing stage is skipped, not fatal. Generated files
-    are named with <company>_<title>_<date>_id<postid>. Returns a dict with each stage's
-    result (including "ranking") and the saved file paths.
+    cross-post ranking → statistics refresh. Resilient: a failing stage is skipped, not
+    fatal. Generated files are named with <company>_<title>_<date>_id<postid>. Returns a
+    dict with each stage's result (including "ranking" and "statistics") and file paths.
     """
     post = get_job_post(job_post_id) or {}
     job_post = load_saved_job_post_text(job_post_id)
@@ -96,6 +105,13 @@ def run_analysis(
     results["fit"] = fit
     if fit is None:
         results["status"] = "error"
+        results["statistics"] = run_stage(
+            "Statistics",
+            refresh_statistics,
+            top_companies=top_companies,
+            top_titles=top_titles,
+            top_skills=top_skills,
+        )
         return results
 
     verdict = fit.get("verdict")
@@ -111,6 +127,13 @@ def run_analysis(
         results["status"] = "declined"
         results["ranking"] = _store_summary_and_rank(
             client, model, job_post_id, verdict, days_remaining, None, None
+        )
+        results["statistics"] = run_stage(
+            "Statistics",
+            refresh_statistics,
+            top_companies=top_companies,
+            top_titles=top_titles,
+            top_skills=top_skills,
         )
         return results
 
@@ -158,6 +181,13 @@ def run_analysis(
 
     results["ranking"] = _store_summary_and_rank(
         client, model, job_post_id, verdict, days_remaining, gaps, plan
+    )
+    results["statistics"] = run_stage(
+        "Statistics",
+        refresh_statistics,
+        top_companies=top_companies,
+        top_titles=top_titles,
+        top_skills=top_skills,
     )
 
     return results

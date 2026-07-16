@@ -7,6 +7,11 @@ from data.db import init_db, list_job_posts
 from services.cv_service import ensure_cv_version
 from services.job_post_service import add_job_post
 from services.analysis_service import run_analysis
+from services.statistics_service import (
+    DEFAULT_TOP_COMPANIES,
+    DEFAULT_TOP_SKILLS,
+    DEFAULT_TOP_TITLES,
+)
 from utils.pipeline import run_stage
 
 
@@ -76,6 +81,57 @@ def print_ranking(ranking: dict | None) -> None:
         print(f"\n{ranking['overall_note']}")
 
 
+def _ask_top_n(label: str, default: int) -> int:
+    """Ask for a positive integer top-N, falling back to default on empty/invalid."""
+    answer = input(f"Top N {label} [{default}]: ").strip()
+    if not answer:
+        return default
+    if answer.isdigit() and int(answer) >= 1:
+        return int(answer)
+    print(f"  Invalid value — using default {default}.")
+    return default
+
+
+def resolve_statistics_limits() -> tuple[int, int, int]:
+    """Let the user choose how many top companies / titles / skills to include."""
+    print("\nStatistics top-N (used after analysis to refresh charts and reports):")
+    companies = _ask_top_n("companies", DEFAULT_TOP_COMPANIES)
+    titles = _ask_top_n("job titles", DEFAULT_TOP_TITLES)
+    skills = _ask_top_n("skills", DEFAULT_TOP_SKILLS)
+    return companies, titles, skills
+
+
+def print_statistics(stats: dict | None) -> None:
+    """Print a short statistics summary (companies locally; titles/skills always)."""
+    if not stats:
+        return
+
+    total = stats.get("total_job_posts", 0)
+    print("\n" + "=" * 60)
+    print(f"JOB POST STATISTICS ({total} posts, updated {stats.get('updated_at')})")
+    print("=" * 60)
+
+    print("\nTop companies:")
+    for i, item in enumerate(stats.get("top_companies") or [], start=1):
+        print(f"  {i}. {item['name']}: {item['count']} ({item['share']:.1f}%)")
+
+    print("\nTop job titles:")
+    for i, item in enumerate(stats.get("top_job_titles") or [], start=1):
+        print(f"  {i}. {item['name']}: {item['count']} ({item['share']:.1f}%)")
+
+    print("\nTop skills:")
+    for i, item in enumerate(stats.get("top_skills") or [], start=1):
+        print(f"  {i}. {item['name']}: {item['count']} ({item['share']:.1f}%)")
+
+    paths = stats.get("paths") or {}
+    if paths.get("job_titles_txt"):
+        print(f"\nSaved job-title report: {paths['job_titles_txt']}")
+    if paths.get("skills_txt"):
+        print(f"Saved skills report:    {paths['skills_txt']}")
+    if paths.get("job_titles_png"):
+        print(f"Diagrams: {paths.get('job_titles_png')}, {paths.get('skills_png')}")
+
+
 def resolve_web_search() -> bool:
     """Let the user enable/disable web search before the run.
 
@@ -115,6 +171,7 @@ def run_cli() -> None:
         return
 
     use_web_search = resolve_web_search()
+    top_companies, top_titles, top_skills = resolve_statistics_limits()
     cv_version_id = ensure_cv_version(cv)
 
     results = run_analysis(
@@ -125,6 +182,9 @@ def run_cli() -> None:
         cv_version_id,
         use_web_search=use_web_search,
         proceed_on_poor_fit=True,
+        top_companies=top_companies,
+        top_titles=top_titles,
+        top_skills=top_skills,
     )
 
     fit = results.get("fit")
@@ -142,6 +202,7 @@ def run_cli() -> None:
     if results.get("status") == "declined":
         print("\nStopped after fit (poor fit).")
         print_ranking(results.get("ranking"))
+        print_statistics(results.get("statistics"))
         return
 
     gaps = results.get("gaps")
@@ -176,6 +237,7 @@ def run_cli() -> None:
         print(f"\nSaved motivation letter to {results.get('letter_path')}")
 
     print_ranking(results.get("ranking"))
+    print_statistics(results.get("statistics"))
 
 
 if __name__ == "__main__":

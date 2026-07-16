@@ -14,3 +14,6 @@ data/job_posts/
 data/learning_plans/
 data/cv_revisions/
 data/motivation_letters/
+
+# Company charts stay local (not linked from README); titles/skills diagrams are tracked.
+statistics/diagrams/companies.png

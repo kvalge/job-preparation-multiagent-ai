@@ -10,6 +10,16 @@ from services.analysis_service import run_analysis
 from services.cv_service import ensure_cv_version, save_cv_with_version
 from services.job_post_service import add_job_post
 from services.ranking_service import load_latest_ranking
+from services.statistics_service import (
+    DEFAULT_TOP_COMPANIES,
+    DEFAULT_TOP_SKILLS,
+    DEFAULT_TOP_TITLES,
+    JOB_TITLES_PNG,
+    SKILLS_PNG,
+    COMPANIES_PNG,
+    compute_statistics,
+    refresh_statistics,
+)
 
 st.set_page_config(page_title="Job Preparation Multiagent AI", page_icon="🧭")
 
@@ -239,6 +249,33 @@ if posts and client is not None and model is not None:
     with col_b:
         proceed_on_poor_fit = st.toggle("Proceed even if poor fit", value=True)
 
+    st.caption("Top-N for statistics refreshed after this analysis:")
+    n_col1, n_col2, n_col3 = st.columns(3)
+    with n_col1:
+        top_companies = st.number_input(
+            "Top companies",
+            min_value=1,
+            max_value=50,
+            value=DEFAULT_TOP_COMPANIES,
+            key="top_companies_n",
+        )
+    with n_col2:
+        top_titles = st.number_input(
+            "Top job titles",
+            min_value=1,
+            max_value=50,
+            value=DEFAULT_TOP_TITLES,
+            key="top_titles_n",
+        )
+    with n_col3:
+        top_skills = st.number_input(
+            "Top skills",
+            min_value=1,
+            max_value=100,
+            value=DEFAULT_TOP_SKILLS,
+            key="top_skills_n",
+        )
+
     if st.button("Run analysis", type="primary", key=f"run_{post_id}"):
         cv = load_cv()
         if not cv:
@@ -255,6 +292,9 @@ if posts and client is not None and model is not None:
                         cv_version_id,
                         use_web_search=use_web_search,
                         proceed_on_poor_fit=proceed_on_poor_fit,
+                        top_companies=int(top_companies),
+                        top_titles=int(top_titles),
+                        top_skills=int(top_skills),
                     )
                     st.session_state["analysis"][post_id] = results
                     label = _post_label(detail)
@@ -304,3 +344,105 @@ def _render_ranking() -> None:
 
 
 _render_ranking()
+
+
+# --- Job post statistics ----------------------------------------------------
+def _stats_table(items: list) -> None:
+    if not items:
+        st.write("No data yet.")
+        return
+    st.dataframe(
+        [
+            {
+                "Rank": i,
+                "Name": item["name"],
+                "Count": item["count"],
+                "Share %": item["share"],
+            }
+            for i, item in enumerate(items, start=1)
+        ],
+        hide_index=True,
+        use_container_width=True,
+    )
+
+
+def _render_statistics() -> None:
+    st.header("Job post statistics")
+    st.caption(
+        "Counts and shares across all saved job posts. Refreshed after every analysis "
+        "(and when you click Update below). Job-title and skills reports/diagrams are "
+        "also written under `statistics/`; company charts stay local only."
+    )
+
+    s_col1, s_col2, s_col3, s_col4 = st.columns([1, 1, 1, 1])
+    with s_col1:
+        view_companies = st.number_input(
+            "Show top companies",
+            min_value=1,
+            max_value=50,
+            value=int(st.session_state.get("top_companies_n", DEFAULT_TOP_COMPANIES)),
+            key="view_companies_n",
+        )
+    with s_col2:
+        view_titles = st.number_input(
+            "Show top titles",
+            min_value=1,
+            max_value=50,
+            value=int(st.session_state.get("top_titles_n", DEFAULT_TOP_TITLES)),
+            key="view_titles_n",
+        )
+    with s_col3:
+        view_skills = st.number_input(
+            "Show top skills",
+            min_value=1,
+            max_value=100,
+            value=int(st.session_state.get("top_skills_n", DEFAULT_TOP_SKILLS)),
+            key="view_skills_n",
+        )
+    with s_col4:
+        st.write("")
+        st.write("")
+        update_clicked = st.button("Update statistics", key="update_stats")
+
+    if update_clicked:
+        with st.spinner("Refreshing statistics and diagrams..."):
+            stats = refresh_statistics(
+                top_companies=int(view_companies),
+                top_titles=int(view_titles),
+                top_skills=int(view_skills),
+            )
+        st.success(
+            f"Statistics updated for {stats['total_job_posts']} job posts "
+            f"({stats['updated_at']})."
+        )
+    else:
+        stats = compute_statistics(
+            top_companies=int(view_companies),
+            top_titles=int(view_titles),
+            top_skills=int(view_skills),
+        )
+
+    st.write(
+        f"**{stats['total_job_posts']}** saved job posts"
+        + (f" · as of {stats['updated_at']}" if stats.get("updated_at") else "")
+    )
+
+    c1, c2 = st.columns(2)
+    with c1:
+        st.subheader("Top companies")
+        _stats_table(stats.get("top_companies") or [])
+        if os.path.exists(COMPANIES_PNG):
+            st.image(COMPANIES_PNG, use_container_width=True)
+    with c2:
+        st.subheader("Top job titles")
+        _stats_table(stats.get("top_job_titles") or [])
+        if os.path.exists(JOB_TITLES_PNG):
+            st.image(JOB_TITLES_PNG, use_container_width=True)
+
+    st.subheader("Top skills")
+    _stats_table(stats.get("top_skills") or [])
+    if os.path.exists(SKILLS_PNG):
+        st.image(SKILLS_PNG, use_container_width=True)
+
+
+_render_statistics()

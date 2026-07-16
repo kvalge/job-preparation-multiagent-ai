@@ -94,13 +94,39 @@ Generated artifacts are written per job post as downloadable files (git-ignored)
 
 Output filenames embed the company, title and date so they're easy to identify, plus the post id to stay unique. JSON was chosen for the plan so a front-end can render it and offer download/convert; CV and letter are markdown for easy display and PDF export. In the UI each is offered as a download button.
 
+## Job post statistics
+
+After every analysis (and on demand in the UI), the project refreshes aggregate statistics across **all saved job posts**:
+
+| Metric | Default top-N | UI / CLI | Text report | PNG diagram | Linked in README |
+|---|---|---|---|---|---|
+| Companies | 5 | ✅ | — (kept private) | local only (git-ignored) | No |
+| Job titles | 5 | ✅ | `statistics/job_titles.txt` | `statistics/diagrams/job_titles.png` | Yes |
+| Skills | 20 | ✅ | `statistics/skills.txt` | `statistics/diagrams/skills.png` | Yes |
+
+Share is the percentage of saved job posts that match that company/title, or that list that skill. You choose the exact top-N for each metric in both the CLI and the UI.
+
+### Latest diagrams (job titles & skills)
+
+These images update whenever statistics are refreshed. Company charts are intentionally **not** published here.
+
+**Top job titles**
+
+![Top job titles](statistics/diagrams/job_titles.png)
+
+**Top skills**
+
+![Top skills](statistics/diagrams/skills.png)
+
+Text reports: [`statistics/job_titles.txt`](statistics/job_titles.txt) · [`statistics/skills.txt`](statistics/skills.txt)
+
 ## Pipeline resilience
 
 The pipeline is fault-tolerant: each stage runs through a `run_stage` wrapper so one agent failing (e.g. a free model returning malformed JSON) prints a warning and skips that step instead of crashing the whole run. Earlier results and DB writes are preserved, and independent steps (CV advisor, motivation letter) still run even if the gap analysis or learning plan fails.
 
 ## Privacy
 
-This is designed as a self-hosted, single-user tool, not a multi-tenant SaaS. Data (CV, job posts, generated outputs, SQLite DB) is stored locally and git-ignored. Only the minimum text needed for a given agent call is sent to the model provider. Note that when web search is enabled, the relevant query/context is also sent to OpenRouter's search provider.
+This is designed as a self-hosted, single-user tool, not a multi-tenant SaaS. Data (CV, job posts, generated outputs, SQLite DB) is stored locally and git-ignored. Only the minimum text needed for a given agent call is sent to the model provider. Note that when web search is enabled, the relevant query/context is also sent to OpenRouter's search provider. Public statistics under `statistics/` intentionally cover **job titles and skills only** — company charts stay local and are not linked from the README.
 
 ## Tech Stack
 
@@ -109,10 +135,11 @@ This is designed as a self-hosted, single-user tool, not a multi-tenant SaaS. Da
 - **Model**: configurable via `.env` (`MODEL=`). Defaults to a free-tier model (see `.env.example`, e.g. `deepseek/deepseek-chat-v3:free`) so the core pipeline runs at no cost.
 - **Web search**: optional, via OpenRouter's web plugin (used only by the Learning Plan Agent). Off by default because it requires OpenRouter credits; toggled per run or via `ENABLE_WEB_SEARCH` in `.env`.
 - **Config**: `python-dotenv` for environment variables
-- **Storage**: local SQLite (`data/jobs.db`) for job post records; text/markdown/JSON files under `data/` for CV input, archived postings, and generated outputs
+- **Storage**: local SQLite (`data/jobs.db`) for job post records; text/markdown/JSON files under `data/` for CV input, archived postings, and generated outputs; public statistics under `statistics/`
+- **Charts**: `matplotlib` bar charts written to `statistics/diagrams/`
 - **Entry point**: `run.py` — a single launcher that runs either the web UI or the CLI (`python run.py [ui|cli]`).
-- **Frontend**: Streamlit web UI (`app.py`) — manage your CV, add/save multiple job posts, and run the full analysis pipeline on any saved post with per-run toggles and download buttons. The CLI (`main.py`) remains available.
-- **Architecture**: front-ends are thin. `config.py` is the single source of LLM/client config; a `services/` layer holds all shared orchestration (`job_post_service` for saving, `analysis_service` for the pipeline, `cv_service` for CV versioning) reused by both CLI and UI; `data/` modules are thin persistence helpers, `agents/` are pure LLM calls, and `utils/` holds cross-cutting helpers. No pipeline logic is duplicated between the CLI and UI.
+- **Frontend**: Streamlit web UI (`app.py`) — manage your CV, add/save multiple job posts, run the full analysis pipeline, view rankings and job-post statistics. The CLI (`main.py`) remains available.
+- **Architecture**: front-ends are thin. `config.py` is the single source of LLM/client config; a `services/` layer holds all shared orchestration (`job_post_service`, `analysis_service`, `ranking_service`, `statistics_service`, `cv_service`) reused by both CLI and UI; `data/` modules are thin persistence helpers, `agents/` are pure LLM calls, and `utils/` holds cross-cutting helpers. No pipeline logic is duplicated between the CLI and UI.
 
 > Note on free models: prompts/completions may be logged by the underlying inference provider (varies per provider — see OpenRouter's per-model "Providers" tab). Fine for this personal/portfolio use; worth revisiting before using with more sensitive data. Free models are also less reliable at strict JSON output, which is why parsing is defensive.
 
@@ -176,6 +203,7 @@ The UI lets you:
 - Select any saved post and **run the full pipeline** (fit → gap → learning plan → CV → letter), with per-run toggles for **web search** (default off) and **proceed even if poor fit** (default on).
 - View results inline and **download** the learning plan, tailored CV, and motivation letter. Each analysis shows which CV version it ran against.
 - See a **"Which job to pursue"** section that ranks all analyzed posts by fit and deadline readiness, highlights which job (and learning path) to start with, and gives a short reason for each. It refreshes automatically after every analysis.
+- Choose **top-N** for companies / job titles / skills, then view **Job post statistics** (tables + bar charts). After analysis (or via **Update statistics**), title/skill txt reports and PNG diagrams are rewritten under `statistics/`.
 
 When you launch the UI via `python run.py ui`, the terminal also logs pipeline progress and a final "Analysis complete" line once a UI run finishes.
 
@@ -190,7 +218,7 @@ On run it reads your CV from `data/cv.txt`, then lets you **choose which job pos
 1. Pick one of your **saved job posts** (added via the UI or a previous run — shown by company/title so it's clear which one), or
 2. **Add & analyze a new post** from `data/job_post.txt` (offered only when that file has content; it's extracted, de-duplicated, and saved first).
 
-After selecting, it asks whether to enable web search, snapshots the current CV version, then walks the pipeline:
+After selecting, it asks whether to enable web search, asks for **top-N** statistics limits (companies / titles / skills), snapshots the current CV version, then walks the pipeline:
 
 1. **Fit verdict** (`good_fit` / `stretch_fit` / `poor_fit`) with reasoning, matches, and gaps. By default it proceeds even on `poor_fit`.
 2. **Gap analysis** graded against the deadline.
@@ -198,6 +226,7 @@ After selecting, it asks whether to enable web search, snapshots the current CV 
 4. **Tailored CV** saved as markdown.
 5. **Motivation letter** saved as markdown.
 6. **Job ranking** — a "which job to pursue" comparison across all analyzed posts, printed at the end with a recommendation and reason for each, plus which one (and learning path) to start with.
+7. **Statistics** — refreshes top companies / titles / skills (count + share), prints a summary, and writes `statistics/job_titles.txt`, `statistics/skills.txt`, plus PNG diagrams under `statistics/diagrams/`.
 
 You no longer need `data/job_post.txt` for the CLI — it's only used as an optional way to add a new post. If there are no saved posts and that file is empty, the CLI tells you to add one (via the UI or the file).
 
@@ -227,6 +256,7 @@ Gaps: [...]
 - [x] CV versioning — analyses record which CV snapshot they used
 - [x] Streamlit front end — CV + job post management and full pipeline with downloads
 - [x] Job post comparison / prioritization — ranks analyzed posts by fit + deadline (CLI + UI)
+- [x] Job post statistics — top companies / titles / skills with configurable N, txt + PNG (CLI + UI)
 - [ ] Assessment Agent with adaptive, skippable clarifying questions
 - [ ] Progress tracking and Adjust/Replan Agent
 - [ ] Evaluation harness for agent output quality
@@ -249,9 +279,17 @@ Gaps: [...]
 │   └── job_ranking.py               # ✅ Job Ranking Agent (which post to pursue)
 ├── services/
 │   ├── job_post_service.py          # add_job_post: extract → dedup → DB + txt file
-│   ├── analysis_service.py          # run_analysis: fit → gap → plan → CV → letter → rank
+│   ├── analysis_service.py          # run_analysis: fit → gap → plan → CV → letter → rank → stats
 │   ├── ranking_service.py           # refresh_ranking / load_latest_ranking
+│   ├── statistics_service.py        # top companies/titles/skills → txt + PNG charts
 │   └── cv_service.py                # CV save + versioning
+├── statistics/                      # public aggregates (titles + skills; companies private)
+│   ├── job_titles.txt               # top job titles count/share report
+│   ├── skills.txt                   # top skills count/share report
+│   └── diagrams/
+│       ├── job_titles.png           # bar chart (linked from README)
+│       ├── skills.png               # bar chart (linked from README)
+│       └── companies.png            # local only (git-ignored)
 ├── data/
 │   ├── cv.py                        # load_cv / save_cv / save_revised_cv
 │   ├── job_post.py                  # load/save input text + save_job_post_file (archive)
