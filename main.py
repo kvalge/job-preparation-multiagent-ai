@@ -5,9 +5,10 @@ from typing import Callable, TypeVar
 
 from data.cv import load_cv, save_revised_cv
 from data.job_post import load_job_post
-from data.db import init_db, save_job_post, get_job_post
+from data.db import init_db, get_job_post, update_job_post_analysis
 from data.learning_plan import save_learning_plan
 from data.motivation_letter import save_motivation_letter
+from services.job_post_service import add_job_post
 from agents.match_check import check_fit
 from agents.gap_analysis import analyze_gaps
 from agents.learning_plan import create_learning_plan
@@ -86,14 +87,17 @@ def main() -> None:
     status = "continued" if proceed == "y" else "declined"
 
     print("\nExtracting job post details and saving to database...\n")
-    job_post_id = run_stage(
-        "Saving job post",
-        save_job_post,
-        client, model, job_post, result["verdict"], result["reasoning"], status,
-    )
-    if job_post_id is None:
+    saved = run_stage("Saving job post", add_job_post, client, model, job_post)
+    if saved is None:
         print("Could not save the job post. Stopping.")
         return
+    job_post_id = saved["id"]
+
+    run_stage(
+        "Recording analysis",
+        update_job_post_analysis,
+        job_post_id, result["verdict"], result["reasoning"], status,
+    )
 
     if status == "declined":
         print("Stopping here.")

@@ -55,7 +55,7 @@ flowchart TD
 
 ## Agents
 
-Each "agent" is a distinct system prompt (and, where relevant, a distinct toolset) — not a separate service. Agents pass a shared state through the pipeline in `main.py` rather than maintaining independent conversation histories. All agents return structured JSON, parsed defensively via `utils/llm_json.py`.
+Each "agent" is a distinct system prompt (and, where relevant, a distinct toolset) — not a separate service. Agents are pure LLM calls that return structured JSON (parsed defensively via `utils/llm_json.py`); orchestration lives in `main.py` (CLI) and the `services/` layer, which the UI also reuses.
 
 | Agent | Status | Responsibility |
 |---|---|---|
@@ -73,15 +73,16 @@ Each "agent" is a distinct system prompt (and, where relevant, a distinct toolse
 
 Each pasted job posting is stored as its own record in a local **SQLite** database (`data/jobs.db`), since gap analyses and plans are specific to a posting:
 
-- **`job_posts`**: company, job_title, salary, location_type, job_post_deadline, disclaimers, summary, date_saved, match_verdict, match_reasoning, status, and a `content_hash` used to avoid saving the same posting twice.
+- **`job_posts`**: company, job_title, salary, location_type, job_post_deadline, disclaimers, summary, date_saved, match_verdict, match_reasoning, `status`, a `content_hash` used to avoid saving the same posting twice, and `txt_path` pointing to the archived raw text. A post can be saved before any analysis is run (`status = "saved"`); running the pipeline updates it to `"continued"` or `"declined"`.
 - **`job_post_skills`**: one row per extracted skill, linked to a job post via foreign key.
 
-The CV is not stored in the DB — it's read from `data/cv.txt` at runtime.
+The CV is not stored in the DB — it's read from `data/cv.txt` at runtime. The raw text of each saved posting is archived to `data/job_posts/job_post_<company>_<title>_<date>_<hash>.txt` so multiple postings are easy to tell apart on disk.
 
 ## Outputs
 
-Generated artifacts are written per job post as downloadable files (git-ignored), ready for a future front-end to render or export:
+Generated artifacts are written per job post as downloadable files (git-ignored), ready for the front-end to render or export:
 
+- **Saved job post (raw text)** → `data/job_posts/job_post_<company>_<title>_<date>_<hash>.txt`
 - **Learning plan** → `data/learning_plans/learning_plan_<id>.json`
 - **Tailored CV** → `data/cv_revisions/cv_<id>.md`
 - **Motivation letter** → `data/motivation_letters/motivation_letter_<id>.md`
@@ -103,8 +104,9 @@ This is designed as a self-hosted, single-user tool, not a multi-tenant SaaS. Da
 - **Model**: configurable via `.env` (`MODEL=`). Defaults to a free-tier model (see `.env.example`, e.g. `deepseek/deepseek-chat-v3:free`) so the core pipeline runs at no cost.
 - **Web search**: optional, via OpenRouter's web plugin (used only by the Learning Plan Agent). Off by default because it requires OpenRouter credits; toggled per run or via `ENABLE_WEB_SEARCH` in `.env`.
 - **Config**: `python-dotenv` for environment variables
-- **Storage**: local SQLite (`data/jobs.db`) for job post records; text/markdown/JSON files under `data/` for CV input and generated outputs
-- **Frontend**: none yet (CLI only); Streamlit/Gradio or FastAPI planned
+- **Storage**: local SQLite (`data/jobs.db`) for job post records; text/markdown/JSON files under `data/` for CV input, archived postings, and generated outputs
+- **Frontend**: Streamlit web UI (`app.py`), in progress — currently supports managing your CV and adding/saving multiple job posts. The CLI (`main.py`) remains available.
+- **Architecture**: shared logic lives in a `services/` layer so the CLI and UI reuse the same orchestration (e.g. `services/job_post_service.py`); `data/` modules are thin persistence helpers and `agents/` are pure LLM calls.
 
 > Note on free models: prompts/completions may be logged by the underlying inference provider (varies per provider — see OpenRouter's per-model "Providers" tab). Fine for this personal/portfolio use; worth revisiting before using with more sensitive data. Free models are also less reliable at strict JSON output, which is why parsing is defensive.
 
@@ -147,9 +149,19 @@ This is designed as a self-hosted, single-user tool, not a multi-tenant SaaS. Da
    python main.py
    ```
 
-> ⚠️ **Note:** `.env` contains sensitive credentials and is git-ignored. `data/cv.txt`, `data/job_post.txt`, `data/jobs.db`, and the generated output folders contain personal data and are also excluded from version control.
+> ⚠️ **Note:** `.env` contains sensitive credentials and is git-ignored. `data/cv.txt`, `data/job_post.txt`, `data/job_posts/`, `data/jobs.db`, and the generated output folders contain personal data and are also excluded from version control.
 
 ## Usage
+
+### Web UI (Streamlit)
+
+```bash
+streamlit run app.py
+```
+
+Currently the UI lets you paste and save/update your CV, and add multiple job posts (each is extracted, de-duplicated, saved to SQLite, and archived to `data/job_posts/`). More of the pipeline will move into the UI in later steps.
+
+### CLI
 
 A CLI tool. On run it reads your CV and the target job post from `data/`, asks whether to enable web search, then walks the pipeline:
 
@@ -182,17 +194,20 @@ Gaps: [...]
 - [x] CV Advisor Agent (truthful, date-aware rewrite)
 - [x] Motivation Letter Agent
 - [x] Resilient pipeline (one agent failing doesn't abort the run)
+- [x] Shared `services/` layer reused by CLI and UI
+- [x] Manage multiple job posts (add/save several, de-duplicated)
+- [~] Streamlit front end — CV + job post management done; pipeline UI in progress
 - [ ] Assessment Agent with adaptive, skippable clarifying questions
 - [ ] Progress tracking and Adjust/Replan Agent
 - [ ] Job post comparison / prioritization view
 - [ ] Evaluation harness for agent output quality
-- [ ] Simple front end (Streamlit/Gradio or FastAPI + minimal UI)
 
 ## Project Structure
 
 ```
 .
 ├── main.py                          # CLI orchestration + resilient pipeline
+├── app.py                           # Streamlit web UI
 ├── agents/
 │   ├── match_check.py               # ✅ Match Check Agent
 │   ├── job_post_extraction.py       # ✅ Job Post Extraction Agent
@@ -200,15 +215,18 @@ Gaps: [...]
 │   ├── learning_plan.py             # ✅ Learning Plan Agent (optional web search)
 │   ├── cv_advisor_agent.py          # ✅ CV Advisor Agent
 │   └── motivation_letter_agent.py   # ✅ Motivation Letter Agent
+├── services/
+│   └── job_post_service.py          # add_job_post: extract → dedup → DB + txt file
 ├── data/
 │   ├── cv.py                        # load_cv / save_cv / save_revised_cv
-│   ├── job_post.py                  # load_job_post / save_job_post (text file)
-│   ├── db.py                        # SQLite init, save/get job post, dedup
+│   ├── job_post.py                  # load/save input text + save_job_post_file (archive)
+│   ├── db.py                        # SQLite: insert/update/list/get job posts, dedup
 │   ├── learning_plan.py             # save_learning_plan (JSON)
 │   ├── motivation_letter.py         # save_motivation_letter (markdown)
 │   ├── cv.txt                       # (gitignored)
-│   ├── job_post.txt                 # (gitignored)
+│   ├── job_post.txt                 # (gitignored) CLI single input file
 │   ├── jobs.db                      # (gitignored)
+│   ├── job_posts/                   # (gitignored) archived saved postings (txt)
 │   ├── learning_plans/              # (gitignored) generated JSON plans
 │   ├── cv_revisions/                # (gitignored) generated CVs
 │   └── motivation_letters/          # (gitignored) generated letters

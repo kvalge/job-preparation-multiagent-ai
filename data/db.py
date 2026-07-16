@@ -3,9 +3,6 @@ import json
 import os
 import sqlite3
 
-from openai import OpenAI
-
-from agents.job_post_extraction import extract_job_post
 from utils.date_utils import get_today
 
 DB_PATH = "data/jobs.db"
@@ -31,14 +28,17 @@ def init_db(path: str = DB_PATH) -> None:
                 match_verdict TEXT,
                 match_reasoning TEXT,
                 status TEXT,
-                content_hash TEXT
+                content_hash TEXT,
+                txt_path TEXT
             )
             """
         )
-        # Migrate databases created before content_hash existed.
+        # Migrate databases created before newer columns existed.
         columns = [row[1] for row in conn.execute("PRAGMA table_info(job_posts)")]
         if "content_hash" not in columns:
             conn.execute("ALTER TABLE job_posts ADD COLUMN content_hash TEXT")
+        if "txt_path" not in columns:
+            conn.execute("ALTER TABLE job_posts ADD COLUMN txt_path TEXT")
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS job_post_skills (
@@ -54,8 +54,8 @@ def init_db(path: str = DB_PATH) -> None:
         conn.close()
 
 
-def _hash_job_post(job_post: str) -> str:
-    """Stable content hash of a job post, used to detect duplicates."""
+def hash_job_post(job_post: str) -> str:
+    """Stable content hash of a job post, used to detect duplicates and name files."""
     return hashlib.sha256(job_post.strip().encode("utf-8")).hexdigest()
 
 
@@ -71,35 +71,23 @@ def find_job_post_by_hash(content_hash: str, path: str = DB_PATH) -> int | None:
         conn.close()
 
 
-def save_job_post(
-    client: OpenAI,
-    model: str,
-    job_post: str,
-    match_verdict: str,
-    match_reasoning: str,
-    status: str,
+def insert_job_post(
+    fields: dict,
+    content_hash: str,
+    *,
+    match_verdict: str | None = None,
+    match_reasoning: str | None = None,
+    status: str = "saved",
+    txt_path: str | None = None,
     path: str = DB_PATH,
 ) -> int:
-    """Extract structured data from a job post and persist it to the database.
+    """Insert one job post (already-extracted fields) plus its skills. Returns the id.
 
-    Uses the extraction agent to pull structured fields from the raw job post text,
-    then inserts one row into job_posts and one row per skill into job_post_skills.
-    Returns the new job_posts.id.
-
-    If an identical job post was already saved, its existing id is returned without
-    re-extracting or re-inserting (avoids duplicate rows and a wasted LLM call).
+    Analysis fields (verdict/reasoning) are optional so a post can be saved before any
+    analysis is run; they can be filled in later via update_job_post_analysis().
     """
-    content_hash = _hash_job_post(job_post)
-    existing_id = find_job_post_by_hash(content_hash, path)
-    if existing_id is not None:
-        print(f"  (This job post is already saved as id {existing_id}; skipping re-save.)")
-        return existing_id
-
-    fields = extract_job_post(client, model, job_post)
-
     disclaimers = fields.get("disclaimers")
     disclaimers_json = json.dumps(disclaimers) if disclaimers else None
-
     skills = fields.get("skills") or []
 
     conn = sqlite3.connect(path)
@@ -109,9 +97,9 @@ def save_job_post(
             INSERT INTO job_posts (
                 company, job_title, salary, location_type, job_post_deadline,
                 disclaimers, summary, date_saved, match_verdict, match_reasoning,
-                status, content_hash
+                status, content_hash, txt_path
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 fields.get("company"),
@@ -126,6 +114,7 @@ def save_job_post(
                 match_reasoning,
                 status,
                 content_hash,
+                txt_path,
             ),
         )
         job_post_id = cursor.lastrowid
@@ -141,6 +130,47 @@ def save_job_post(
         conn.close()
 
     return job_post_id
+
+
+def update_job_post_analysis(
+    job_post_id: int,
+    match_verdict: str,
+    match_reasoning: str,
+    status: str,
+    path: str = DB_PATH,
+) -> None:
+    """Record fit-analysis results (verdict/reasoning/status) on an existing job post."""
+    conn = sqlite3.connect(path)
+    try:
+        conn.execute(
+            """
+            UPDATE job_posts
+            SET match_verdict = ?, match_reasoning = ?, status = ?
+            WHERE id = ?
+            """,
+            (match_verdict, match_reasoning, status, job_post_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def list_job_posts(path: str = DB_PATH) -> list[dict]:
+    """Return saved job posts (most recent first) as a list of dicts."""
+    conn = sqlite3.connect(path)
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute(
+            """
+            SELECT id, company, job_title, location_type, job_post_deadline,
+                   status, date_saved
+            FROM job_posts
+            ORDER BY id DESC
+            """
+        ).fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        conn.close()
 
 
 def get_job_post(job_post_id: int, path: str = DB_PATH) -> dict | None:

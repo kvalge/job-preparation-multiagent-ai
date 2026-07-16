@@ -9,6 +9,7 @@ venv/
 
 data/cv.txt
 data/job_post.txt
+data/job_posts/
 /data/jobs.db
 data/learning_plans/
 data/cv_revisions/
