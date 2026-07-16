@@ -180,14 +180,20 @@ When you launch the UI via `python run.py ui`, the terminal also logs pipeline p
 python run.py cli       # or: python main.py
 ```
 
-On run it reads your CV and the target job post from `data/`, asks whether to enable web search, then walks the pipeline:
+On run it reads your CV from `data/cv.txt`, then lets you **choose which job post to analyze**:
 
-1. **Extracts and saves** the job post to SQLite (skipped if an identical post was already saved) and snapshots the current CV version.
-2. **Fit verdict** (`good_fit` / `stretch_fit` / `poor_fit`) with reasoning, matches, and gaps. By default it proceeds even on `poor_fit`.
-3. **Gap analysis** graded against the deadline.
-4. **Learning plan** saved as JSON.
-5. **Tailored CV** saved as markdown.
-6. **Motivation letter** saved as markdown.
+1. Pick one of your **saved job posts** (added via the UI or a previous run — shown by company/title so it's clear which one), or
+2. **Add & analyze a new post** from `data/job_post.txt` (offered only when that file has content; it's extracted, de-duplicated, and saved first).
+
+After selecting, it asks whether to enable web search, snapshots the current CV version, then walks the pipeline:
+
+1. **Fit verdict** (`good_fit` / `stretch_fit` / `poor_fit`) with reasoning, matches, and gaps. By default it proceeds even on `poor_fit`.
+2. **Gap analysis** graded against the deadline.
+3. **Learning plan** saved as JSON.
+4. **Tailored CV** saved as markdown.
+5. **Motivation letter** saved as markdown.
+
+You no longer need `data/job_post.txt` for the CLI — it's only used as an optional way to add a new post. If there are no saved posts and that file is empty, the CLI tells you to add one (via the UI or the file).
 
 ```
 Verdict: stretch_fit
