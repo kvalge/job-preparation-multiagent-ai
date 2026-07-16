@@ -22,18 +22,19 @@ def save_cv(text: str, path: str = CV_PATH) -> None:
 
 
 def save_revised_cv(
-    text: str, job_post_id: int, dir_path: str = CV_REVISIONS_DIR
+    text: str, name_stem: str, dir_path: str = CV_REVISIONS_DIR
 ) -> str:
     """Write a job-tailored revised CV to its own file and return the path.
 
     Saved separately from the original data/cv.txt (never overwritten) as markdown,
-    so a front-end can render it and offer a download / PDF export.
+    so a front-end can render it and offer a download / PDF export. name_stem is the
+    shared <company>_<title>_<date>_id<postid> stem.
     """
     text = text.strip()
     if not text:
         raise ValueError("Revised CV text cannot be empty.")
     os.makedirs(dir_path, exist_ok=True)
-    path = os.path.join(dir_path, f"cv_{job_post_id}.md")
+    path = os.path.join(dir_path, f"cv_{name_stem}.md")
     with open(path, "w", encoding="utf-8") as f:
         f.write(text)
     return path

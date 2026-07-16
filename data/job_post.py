@@ -1,5 +1,6 @@
 import os
-import re
+
+from utils.text_utils import slugify
 
 JOB_POST_PATH = "data/job_post.txt"
 JOB_POSTS_DIR = "data/job_posts"
@@ -18,12 +19,6 @@ def save_job_post(text: str, path: str = JOB_POST_PATH) -> None:
         f.write(text.strip())
 
 
-def _slugify(value: str | None) -> str:
-    """Turn a company/title into a filesystem-safe slug (fallback: 'unknown')."""
-    slug = re.sub(r"[^a-z0-9]+", "_", (value or "").strip().lower()).strip("_")
-    return slug or "unknown"
-
-
 def save_job_post_file(
     text: str,
     company: str | None,
@@ -40,7 +35,7 @@ def save_job_post_file(
     """
     os.makedirs(dir_path, exist_ok=True)
     filename = (
-        f"job_post_{_slugify(company)}_{_slugify(job_title)}_"
+        f"job_post_{slugify(company)}_{slugify(job_title)}_"
         f"{date_saved}_{unique_suffix}.txt"
     )
     path = os.path.join(dir_path, filename)

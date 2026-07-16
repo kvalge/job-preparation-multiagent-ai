@@ -1,16 +1,20 @@
-import json
-
 from openai import OpenAI
 from openai.types.chat import (
     ChatCompletionMessageParam,
     ChatCompletionSystemMessageParam,
     ChatCompletionUserMessageParam,
 )
+from openai.types.shared_params import ResponseFormatJSONObject
+
+from utils.date_utils import get_today
+from utils.llm_json import parse_json_response
 
 JOB_POST_EXTRACTION_SYSTEM_PROMPT = """You extract structured information from a job posting.
 
 Extract only what is explicitly stated or can be confidently inferred from the text.
 If a field is not present or cannot be determined, use null (do not guess).
+If the deadline is written relative to today (e.g. "apply within 2 weeks"), resolve it
+to an absolute ISO date using today's date.
 
 Respond ONLY with valid JSON in this exact format, no other text:
 {
@@ -28,10 +32,13 @@ Respond ONLY with valid JSON in this exact format, no other text:
 
 def extract_job_post(client: OpenAI, model: str, job_post: str) -> dict:
     """Extract structured fields from a job post. Returns a dict matching the schema above."""
+    system_prompt = (
+        f"{JOB_POST_EXTRACTION_SYSTEM_PROMPT}\n\n"
+        f"Today's date is {get_today()}. Use it to resolve any relative deadlines."
+    )
+
     messages: list[ChatCompletionMessageParam] = [
-        ChatCompletionSystemMessageParam(
-            role="system", content=JOB_POST_EXTRACTION_SYSTEM_PROMPT
-        ),
+        ChatCompletionSystemMessageParam(role="system", content=system_prompt),
         ChatCompletionUserMessageParam(role="user", content=f"Job Post:\n{job_post}"),
     ]
 
@@ -39,6 +46,6 @@ def extract_job_post(client: OpenAI, model: str, job_post: str) -> dict:
         model=model,
         messages=messages,
         temperature=0.2,
+        response_format=ResponseFormatJSONObject(type="json_object"),
     )
-    raw = response.choices[0].message.content or "{}"
-    return json.loads(raw)
+    return parse_json_response(response, context="job post extraction")

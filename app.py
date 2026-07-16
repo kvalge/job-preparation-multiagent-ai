@@ -1,11 +1,14 @@
+import json
 import os
 
 import streamlit as st
 from dotenv import load_dotenv
 from openai import OpenAI
 
-from data.cv import load_cv, save_cv
-from data.db import init_db, list_job_posts
+from data.cv import load_cv
+from data.db import get_cv_version, get_job_post, init_db, list_job_posts
+from services.analysis_service import run_analysis
+from services.cv_service import ensure_cv_version, save_cv_with_version
 from services.job_post_service import add_job_post
 
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
@@ -14,6 +17,7 @@ st.set_page_config(page_title="Job Preparation Multiagent AI", page_icon="🧭")
 
 load_dotenv()
 init_db()
+st.session_state.setdefault("analysis", {})
 
 api_key = os.getenv("API_KEY")
 model = os.getenv("MODEL")
@@ -48,8 +52,8 @@ if st.button("Save CV", type="primary"):
     if not cv_to_save:
         st.error("CV text cannot be empty.")
     else:
-        save_cv(cv_to_save)
-        st.success("CV saved.")
+        version_id = save_cv_with_version(cv_to_save)
+        st.success(f"CV saved (version {version_id}).")
         st.rerun()
 
 # --- Job posts --------------------------------------------------------------
@@ -60,7 +64,7 @@ st.caption(
 )
 
 if client is None:
-    st.error("Set API_KEY and MODEL in your .env file to add job posts.")
+    st.error("Set API_KEY and MODEL in your .env file to add and analyze job posts.")
 else:
     with st.form("add_job_post", clear_on_submit=True):
         job_post_text = st.text_area(
@@ -108,3 +112,156 @@ else:
             "date_saved": "Saved",
         },
     )
+
+
+# --- Analyze a job post -----------------------------------------------------
+def _post_label(post: dict) -> str:
+    parts = [part for part in (post.get("company"), post.get("job_title")) if part]
+    name = " — ".join(parts) if parts else "(untitled)"
+    return f"#{post['id']} · {name}"
+
+
+def _render_results(results: dict) -> None:
+    fit = results.get("fit")
+    if fit is None:
+        st.error("Fit evaluation failed — see the terminal log for details.")
+        return
+
+    verdict = fit.get("verdict", "unknown")
+    icon = {"good_fit": "✅", "stretch_fit": "🟡", "poor_fit": "🔴"}.get(verdict, "")
+    st.subheader(f"{icon} Fit: {verdict}")
+    st.write(fit.get("reasoning", ""))
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown("**Matches**")
+        for m in fit.get("key_matches", []):
+            st.markdown(f"- {m}")
+    with col2:
+        st.markdown("**Gaps**")
+        for g in fit.get("key_gaps", []):
+            st.markdown(f"- {g}")
+
+    cv_version_id = results.get("cv_version_id")
+    if cv_version_id is not None:
+        version = get_cv_version(cv_version_id)
+        saved_at = version.get("created_at") if version else "?"
+        st.caption(f"Evaluated against CV version {cv_version_id} (saved {saved_at}).")
+
+    if results.get("status") == "declined":
+        st.warning("Stopped after fit evaluation (poor fit).")
+        return
+
+    gaps = results.get("gaps")
+    if gaps is not None:
+        st.subheader(f"Skill gaps ({results.get('days_remaining', '?')} days until deadline)")
+        st.write(gaps.get("overall_summary", ""))
+        for gap in gaps.get("prioritized_gaps", []):
+            fit_note = "achievable" if gap.get("achievable_before_deadline") else "tight"
+            st.markdown(
+                f"**{gap['priority']}. {gap['skill']}** "
+                f"[{gap['importance']}] · ~{gap['estimated_days_to_learn']}d ({fit_note})"
+            )
+            st.markdown(f"  {gap['recommendation']}")
+
+    plan = results.get("plan")
+    if plan is not None:
+        st.subheader("Learning plan")
+        st.write(
+            f"{plan.get('total_estimated_days', '?')}d of "
+            f"{plan.get('days_remaining', '?')}d available — {plan.get('feasibility_note', '')}"
+        )
+        for item in plan.get("items", []):
+            with st.expander(
+                f"{item['priority']}. {item['skill']} (~{item['estimated_days']}d)"
+            ):
+                st.markdown(f"**What:** {item['what']}")
+                st.markdown(f"**Why:** {item['why']}")
+                for res in item.get("resources", []):
+                    st.markdown(f"- [{res['name']}]({res['link']}) — {res['description']}")
+        if results.get("plan_path"):
+            st.download_button(
+                "Download learning plan (JSON)",
+                data=json.dumps(plan, indent=2, ensure_ascii=False),
+                file_name=os.path.basename(results["plan_path"]),
+                mime="application/json",
+                key=f"dl_plan_{results['job_post_id']}",
+            )
+
+    advice = results.get("cv")
+    if advice is not None:
+        st.subheader("Tailored CV")
+        for rec in advice.get("recommendations", []):
+            st.markdown(f"- **[{rec['section']}]** {rec['change']} — _{rec['why']}_")
+        with st.expander("Preview revised CV"):
+            st.markdown(advice["revised_cv"])
+        if results.get("cv_path"):
+            st.download_button(
+                "Download tailored CV (Markdown)",
+                data=advice["revised_cv"],
+                file_name=os.path.basename(results["cv_path"]),
+                mime="text/markdown",
+                key=f"dl_cv_{results['job_post_id']}",
+            )
+
+    letter = results.get("letter")
+    if letter is not None:
+        st.subheader("Motivation letter")
+        st.markdown(letter["motivation_letter"])
+        if results.get("letter_path"):
+            st.download_button(
+                "Download motivation letter (Markdown)",
+                data=letter["motivation_letter"],
+                file_name=os.path.basename(results["letter_path"]),
+                mime="text/markdown",
+                key=f"dl_letter_{results['job_post_id']}",
+            )
+
+
+if posts and client is not None:
+    st.header("Analyze a job post")
+
+    selected = st.selectbox(
+        "Select a saved job post",
+        options=posts,
+        format_func=_post_label,
+    )
+    post_id = selected["id"]
+
+    detail = get_job_post(post_id) or {}
+    st.write(
+        f"**Company:** {detail.get('company') or '—'}  |  "
+        f"**Title:** {detail.get('job_title') or '—'}  |  "
+        f"**Deadline:** {detail.get('job_post_deadline') or '—'}  |  "
+        f"**Status:** {detail.get('status') or '—'}"
+    )
+
+    col_a, col_b = st.columns(2)
+    with col_a:
+        use_web_search = st.toggle("Use web search for resources", value=False)
+    with col_b:
+        proceed_on_poor_fit = st.toggle("Proceed even if poor fit", value=True)
+
+    if st.button("Run analysis", type="primary", key=f"run_{post_id}"):
+        cv = load_cv()
+        if not cv:
+            st.error("Save your CV first (above) before running analysis.")
+        else:
+            cv_version_id = ensure_cv_version(cv)
+            with st.spinner("Running analysis pipeline... this can take a while."):
+                try:
+                    results = run_analysis(
+                        client,
+                        model,
+                        post_id,
+                        cv,
+                        cv_version_id,
+                        use_web_search=use_web_search,
+                        proceed_on_poor_fit=proceed_on_poor_fit,
+                    )
+                    st.session_state["analysis"][post_id] = results
+                except Exception as e:
+                    st.error(f"Analysis failed: {e}")
+
+    cached = st.session_state["analysis"].get(post_id)
+    if cached is not None:
+        _render_results(cached)

@@ -29,7 +29,8 @@ def init_db(path: str = DB_PATH) -> None:
                 match_reasoning TEXT,
                 status TEXT,
                 content_hash TEXT,
-                txt_path TEXT
+                txt_path TEXT,
+                cv_version_id INTEGER
             )
             """
         )
@@ -39,6 +40,8 @@ def init_db(path: str = DB_PATH) -> None:
             conn.execute("ALTER TABLE job_posts ADD COLUMN content_hash TEXT")
         if "txt_path" not in columns:
             conn.execute("ALTER TABLE job_posts ADD COLUMN txt_path TEXT")
+        if "cv_version_id" not in columns:
+            conn.execute("ALTER TABLE job_posts ADD COLUMN cv_version_id INTEGER")
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS job_post_skills (
@@ -46,6 +49,16 @@ def init_db(path: str = DB_PATH) -> None:
                 job_post_id INTEGER,
                 skill TEXT,
                 FOREIGN KEY (job_post_id) REFERENCES job_posts (id)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS cv_versions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                content TEXT,
+                content_hash TEXT,
+                created_at TEXT
             )
             """
         )
@@ -137,20 +150,79 @@ def update_job_post_analysis(
     match_verdict: str,
     match_reasoning: str,
     status: str,
+    cv_version_id: int | None = None,
     path: str = DB_PATH,
 ) -> None:
-    """Record fit-analysis results (verdict/reasoning/status) on an existing job post."""
+    """Record fit-analysis results on an existing job post.
+
+    Also stamps which CV version the analysis was run against, so it stays clear even
+    after the CV is edited later.
+    """
     conn = sqlite3.connect(path)
     try:
         conn.execute(
             """
             UPDATE job_posts
-            SET match_verdict = ?, match_reasoning = ?, status = ?
+            SET match_verdict = ?, match_reasoning = ?, status = ?, cv_version_id = ?
             WHERE id = ?
             """,
-            (match_verdict, match_reasoning, status, job_post_id),
+            (match_verdict, match_reasoning, status, cv_version_id, job_post_id),
         )
         conn.commit()
+    finally:
+        conn.close()
+
+
+def save_cv_version(text: str, path: str = DB_PATH) -> int:
+    """Snapshot a CV version, returning its id.
+
+    De-duplicates: if the most recent version has identical content, its id is returned
+    instead of inserting a copy.
+    """
+    content = text.strip()
+    content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
+    conn = sqlite3.connect(path)
+    try:
+        latest = conn.execute(
+            "SELECT id, content_hash FROM cv_versions ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        if latest is not None and latest[1] == content_hash:
+            return latest[0]
+        cursor = conn.execute(
+            "INSERT INTO cv_versions (content, content_hash, created_at) VALUES (?, ?, ?)",
+            (content, content_hash, get_today()),
+        )
+        conn.commit()
+        version_id = cursor.lastrowid
+        if version_id is None:
+            raise RuntimeError("Failed to insert CV version: no row id returned.")
+        return version_id
+    finally:
+        conn.close()
+
+
+def get_latest_cv_version(path: str = DB_PATH) -> dict | None:
+    """Return the most recent CV version as a dict, or None if none saved yet."""
+    conn = sqlite3.connect(path)
+    conn.row_factory = sqlite3.Row
+    try:
+        row = conn.execute(
+            "SELECT * FROM cv_versions ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def get_cv_version(version_id: int, path: str = DB_PATH) -> dict | None:
+    """Return a specific CV version as a dict, or None if not found."""
+    conn = sqlite3.connect(path)
+    conn.row_factory = sqlite3.Row
+    try:
+        row = conn.execute(
+            "SELECT * FROM cv_versions WHERE id = ?", (version_id,)
+        ).fetchone()
+        return dict(row) if row else None
     finally:
         conn.close()
 
