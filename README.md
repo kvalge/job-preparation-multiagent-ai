@@ -37,9 +37,12 @@ flowchart TD
     CVADV --> OUT
     LETTER --> OUT
 
+    PLAN --> RANK
+    RANK["Job Ranking Agent ✅\nRanks all analyzed posts by\nfit + deadline readiness,\nrecommends which to pursue"]
+    STORE --> RANK
+
     ASSESS["Assessment Agent (planned)\nAdaptive clarifying questions"]
     ADJUST["Adjust / Replan Agent (planned)\nReacts to progress/constraints"]
-    COMPARE["Comparison View (planned)\nRank saved posts by readiness"]
 
     style MATCH fill:#d9ead3,stroke:#38761d
     style EXTRACT fill:#d9ead3,stroke:#38761d
@@ -47,10 +50,10 @@ flowchart TD
     style PLAN fill:#d9ead3,stroke:#38761d
     style CVADV fill:#d9ead3,stroke:#38761d
     style LETTER fill:#d9ead3,stroke:#38761d
+    style RANK fill:#d9ead3,stroke:#38761d
     style STOP fill:#f4cccc,stroke:#cc0000
     style ASSESS fill:#e8f0fe,stroke:#4285f4
     style ADJUST fill:#f3e8fd,stroke:#a142f4
-    style COMPARE fill:#e8f0fe,stroke:#4285f4
 ```
 
 ## Agents
@@ -65,17 +68,18 @@ Each "agent" is a distinct system prompt (and, where relevant, a distinct toolse
 | **Learning Plan Agent** | ✅ Implemented | Turns prioritized gaps into a realistic, time-boxed study plan that fits the remaining days. Finds real learning resources via **optional** OpenRouter web search, with a graceful fallback to the model's own knowledge when search is unavailable. |
 | **CV Advisor Agent** | ✅ Implemented | Recommends concrete, truthful CV edits tailored to the posting and produces a revised CV. Never fabricates — only reuses facts already in the CV. Date-aware. |
 | **Motivation Letter Agent** | ✅ Implemented | Drafts a concise (under one A4 page), modest, non-exaggerated letter explaining why the candidate is applying to this company and role. No fabrication. |
+| **Job Ranking Agent** | ✅ Implemented | After each analysis, ranks all analyzed job posts against each other by fit verdict and how realistically the gaps can be closed before each deadline, then recommends which job (and learning path) to pursue first with a short reason for each. |
 | **Assessment Agent** | Planned | Adaptive, skippable clarifying questions (time available, learning style), with sensible defaults instead of blocking. |
 | **Adjust / Replan Agent** | Planned | Reacts to reported progress/struggle or changed constraints and replans. |
-| **Comparison View** | Planned | Ranks saved job posts by estimated readiness vs. deadline urgency. |
 
 ## Data model
 
 Each pasted job posting is stored as its own record in a local **SQLite** database (`data/jobs.db`), since gap analyses and plans are specific to a posting:
 
-- **`job_posts`**: company, job_title, salary, location_type, job_post_deadline, disclaimers, summary, date_saved, match_verdict, match_reasoning, `status`, a `content_hash` used to avoid saving the same posting twice, `txt_path` pointing to the archived raw text, and `cv_version_id` recording which CV snapshot the analysis ran against. A post can be saved before any analysis is run (`status = "saved"`); running the pipeline updates it to `"continued"` or `"declined"`.
+- **`job_posts`**: company, job_title, salary, location_type, job_post_deadline, disclaimers, summary, date_saved, match_verdict, match_reasoning, `status`, a `content_hash` used to avoid saving the same posting twice, `txt_path` pointing to the archived raw text, `cv_version_id` recording which CV snapshot the analysis ran against, and `analysis_summary` — a compact JSON snapshot of the latest analysis (verdict, days remaining, gap count, plan feasibility) that feeds the cross-post ranking. A post can be saved before any analysis is run (`status = "saved"`); running the pipeline updates it to `"continued"` or `"declined"`.
 - **`job_post_skills`**: one row per extracted skill, linked to a job post via foreign key.
 - **`cv_versions`**: every distinct CV state (content, hash, timestamp). Because analyses are stamped with a `cv_version_id`, it stays clear which CV a given job post was evaluated against even after you edit your CV.
+- **`rankings`**: each cross-post ranking result (JSON, timestamp). Refreshed after every analysis so both CLI and UI can show the latest "which job to pursue" recommendation without recomputing.
 
 The current CV is also kept as `data/cv.txt` for convenience. The raw text of each saved posting is archived to `data/job_posts/job_post_<company>_<title>_<date>_<hash>.txt` so multiple postings are easy to tell apart on disk.
 
@@ -171,6 +175,7 @@ The UI lets you:
 - Add multiple job posts (each is extracted, de-duplicated, saved to SQLite, and archived to `data/job_posts/`).
 - Select any saved post and **run the full pipeline** (fit → gap → learning plan → CV → letter), with per-run toggles for **web search** (default off) and **proceed even if poor fit** (default on).
 - View results inline and **download** the learning plan, tailored CV, and motivation letter. Each analysis shows which CV version it ran against.
+- See a **"Which job to pursue"** section that ranks all analyzed posts by fit and deadline readiness, highlights which job (and learning path) to start with, and gives a short reason for each. It refreshes automatically after every analysis.
 
 When you launch the UI via `python run.py ui`, the terminal also logs pipeline progress and a final "Analysis complete" line once a UI run finishes.
 
@@ -192,6 +197,7 @@ After selecting, it asks whether to enable web search, snapshots the current CV 
 3. **Learning plan** saved as JSON.
 4. **Tailored CV** saved as markdown.
 5. **Motivation letter** saved as markdown.
+6. **Job ranking** — a "which job to pursue" comparison across all analyzed posts, printed at the end with a recommendation and reason for each, plus which one (and learning path) to start with.
 
 You no longer need `data/job_post.txt` for the CLI — it's only used as an optional way to add a new post. If there are no saved posts and that file is empty, the CLI tells you to add one (via the UI or the file).
 
@@ -220,9 +226,9 @@ Gaps: [...]
 - [x] Manage multiple job posts (add/save several, de-duplicated)
 - [x] CV versioning — analyses record which CV snapshot they used
 - [x] Streamlit front end — CV + job post management and full pipeline with downloads
+- [x] Job post comparison / prioritization — ranks analyzed posts by fit + deadline (CLI + UI)
 - [ ] Assessment Agent with adaptive, skippable clarifying questions
 - [ ] Progress tracking and Adjust/Replan Agent
-- [ ] Job post comparison / prioritization view
 - [ ] Evaluation harness for agent output quality
 
 ## Project Structure
@@ -239,10 +245,12 @@ Gaps: [...]
 │   ├── gap_analysis.py              # ✅ Gap Analysis Agent
 │   ├── learning_plan.py             # ✅ Learning Plan Agent (optional web search)
 │   ├── cv_advisor_agent.py          # ✅ CV Advisor Agent
-│   └── motivation_letter_agent.py   # ✅ Motivation Letter Agent
+│   ├── motivation_letter_agent.py   # ✅ Motivation Letter Agent
+│   └── job_ranking.py               # ✅ Job Ranking Agent (which post to pursue)
 ├── services/
 │   ├── job_post_service.py          # add_job_post: extract → dedup → DB + txt file
-│   ├── analysis_service.py          # run_analysis: fit → gap → plan → CV → letter
+│   ├── analysis_service.py          # run_analysis: fit → gap → plan → CV → letter → rank
+│   ├── ranking_service.py           # refresh_ranking / load_latest_ranking
 │   └── cv_service.py                # CV save + versioning
 ├── data/
 │   ├── cv.py                        # load_cv / save_cv / save_revised_cv

@@ -46,6 +46,36 @@ def choose_job_post(
     return None
 
 
+def print_ranking(ranking: dict | None) -> None:
+    """Print the cross-post ranking that tells the user which job to pursue first."""
+    if not ranking:
+        return
+
+    labels = {p["id"]: _post_label(p) for p in list_job_posts()}
+
+    print("\n" + "=" * 60)
+    print("WHICH JOB TO PURSUE (ranked by fit + deadline readiness)")
+    print("=" * 60)
+
+    for item in ranking.get("ranking", []):
+        pid = item.get("job_post_id")
+        label = labels.get(pid, f"#{pid}")
+        print(
+            f"  {item.get('rank')}. #{pid} {label} "
+            f"[{item.get('recommendation')}]"
+        )
+        print(f"     -> {item.get('reason')}")
+
+    top = ranking.get("top_pick") or {}
+    if top.get("job_post_id") is not None:
+        pid = top["job_post_id"]
+        print(f"\nStart here: #{pid} {labels.get(pid, '')}")
+        print(f"  {top.get('why', '')}")
+
+    if ranking.get("overall_note"):
+        print(f"\n{ranking['overall_note']}")
+
+
 def resolve_web_search() -> bool:
     """Let the user enable/disable web search before the run.
 
@@ -111,6 +141,7 @@ def run_cli() -> None:
 
     if results.get("status") == "declined":
         print("\nStopped after fit (poor fit).")
+        print_ranking(results.get("ranking"))
         return
 
     gaps = results.get("gaps")
@@ -143,6 +174,8 @@ def run_cli() -> None:
         print("\nMotivation letter:\n")
         print(letter["motivation_letter"])
         print(f"\nSaved motivation letter to {results.get('letter_path')}")
+
+    print_ranking(results.get("ranking"))
 
 
 if __name__ == "__main__":

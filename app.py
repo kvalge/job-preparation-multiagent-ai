@@ -9,6 +9,7 @@ from data.db import get_cv_version, get_job_post, init_db, list_job_posts
 from services.analysis_service import run_analysis
 from services.cv_service import ensure_cv_version, save_cv_with_version
 from services.job_post_service import add_job_post
+from services.ranking_service import load_latest_ranking
 
 st.set_page_config(page_title="Job Preparation Multiagent AI", page_icon="🧭")
 
@@ -267,3 +268,39 @@ if posts and client is not None and model is not None:
     cached = st.session_state["analysis"].get(post_id)
     if cached is not None:
         _render_results(cached)
+
+
+# --- Which job to pursue (cross-post ranking) -------------------------------
+def _render_ranking() -> None:
+    ranking = load_latest_ranking()
+    if not ranking:
+        return
+
+    st.header("Which job to pursue")
+    st.caption(
+        "Ranked across all analyzed job posts by fit and how realistically the gaps "
+        "can be closed before each deadline. Refreshed after every analysis"
+        + (f" (last updated {ranking['created_at']})." if ranking.get("created_at") else ".")
+    )
+
+    labels = {p["id"]: _post_label(p) for p in list_job_posts()}
+
+    top = ranking.get("top_pick") or {}
+    top_id = top.get("job_post_id")
+    if top_id is not None:
+        st.success(f"**Start here: {labels.get(top_id, f'#{top_id}')}**\n\n{top.get('why', '')}")
+
+    for item in ranking.get("ranking", []):
+        pid = item.get("job_post_id")
+        rec = item.get("recommendation", "")
+        icon = {"pursue": "✅", "maybe": "🟡", "skip": "🔴"}.get(rec, "•")
+        st.markdown(
+            f"**{item.get('rank')}. {labels.get(pid, f'#{pid}')}** "
+            f"{icon} _{rec}_ — {item.get('reason', '')}"
+        )
+
+    if ranking.get("overall_note"):
+        st.info(ranking["overall_note"])
+
+
+_render_ranking()

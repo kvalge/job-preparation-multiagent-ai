@@ -30,7 +30,8 @@ def init_db(path: str = DB_PATH) -> None:
                 status TEXT,
                 content_hash TEXT,
                 txt_path TEXT,
-                cv_version_id INTEGER
+                cv_version_id INTEGER,
+                analysis_summary TEXT
             )
             """
         )
@@ -42,6 +43,8 @@ def init_db(path: str = DB_PATH) -> None:
             conn.execute("ALTER TABLE job_posts ADD COLUMN txt_path TEXT")
         if "cv_version_id" not in columns:
             conn.execute("ALTER TABLE job_posts ADD COLUMN cv_version_id INTEGER")
+        if "analysis_summary" not in columns:
+            conn.execute("ALTER TABLE job_posts ADD COLUMN analysis_summary TEXT")
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS job_post_skills (
@@ -58,6 +61,15 @@ def init_db(path: str = DB_PATH) -> None:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 content TEXT,
                 content_hash TEXT,
+                created_at TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS rankings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                content TEXT,
                 created_at TEXT
             )
             """
@@ -261,5 +273,73 @@ def get_job_post(job_post_id: int, path: str = DB_PATH) -> dict | None:
         ).fetchall()
         record["skills"] = [r["skill"] for r in skill_rows]
         return record
+    finally:
+        conn.close()
+
+
+def update_job_post_summary(
+    job_post_id: int, summary_json: str, path: str = DB_PATH
+) -> None:
+    """Store a compact JSON summary of the latest analysis on the job post row.
+
+    This snapshot (verdict, days remaining, gaps, plan feasibility) feeds the
+    cross-post ranking without having to re-read the generated output files.
+    """
+    conn = sqlite3.connect(path)
+    try:
+        conn.execute(
+            "UPDATE job_posts SET analysis_summary = ? WHERE id = ?",
+            (summary_json, job_post_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def list_analyzed_job_posts(path: str = DB_PATH) -> list[dict]:
+    """Return job posts that have an analysis summary, for ranking/comparison."""
+    conn = sqlite3.connect(path)
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute(
+            """
+            SELECT id, company, job_title, job_post_deadline, status,
+                   match_verdict, analysis_summary
+            FROM job_posts
+            WHERE analysis_summary IS NOT NULL
+            ORDER BY id DESC
+            """
+        ).fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        conn.close()
+
+
+def save_ranking(content: str, path: str = DB_PATH) -> int:
+    """Persist a ranking result (JSON string). Keeps history; returns the row id."""
+    conn = sqlite3.connect(path)
+    try:
+        cursor = conn.execute(
+            "INSERT INTO rankings (content, created_at) VALUES (?, ?)",
+            (content, get_today()),
+        )
+        conn.commit()
+        ranking_id = cursor.lastrowid
+        if ranking_id is None:
+            raise RuntimeError("Failed to insert ranking: no row id returned.")
+        return ranking_id
+    finally:
+        conn.close()
+
+
+def get_latest_ranking(path: str = DB_PATH) -> dict | None:
+    """Return the most recent ranking as {content, created_at}, or None."""
+    conn = sqlite3.connect(path)
+    conn.row_factory = sqlite3.Row
+    try:
+        row = conn.execute(
+            "SELECT content, created_at FROM rankings ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        return dict(row) if row else None
     finally:
         conn.close()
