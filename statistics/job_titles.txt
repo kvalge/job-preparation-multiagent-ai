@@ -1,9 +1,10 @@
 Top job titles (count / share of job posts)
-Updated: 2026-07-16
-Total job posts: 3
+Updated: 2026-07-17
+Total job posts: 6
 
 Rank  Name                                       Count     Share
 ----------------------------------------------------------------
-1     Data Analyst                                   1     33.3%
-2     Growth Analyst                                 1     33.3%
-3     Senior Data Analyst                            1     33.3%
+1     Data Analyst                                   2     33.3%
+2     Reporting Engineer                             2     33.3%
+3     Growth Analyst                                 1     16.7%
+4     Senior Data Analyst                            1     16.7%

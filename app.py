@@ -362,7 +362,7 @@ def _stats_table(items: list) -> None:
             for i, item in enumerate(items, start=1)
         ],
         hide_index=True,
-        use_container_width=True,
+        width="stretch",
     )
 
 
@@ -432,17 +432,17 @@ def _render_statistics() -> None:
         st.subheader("Top companies")
         _stats_table(stats.get("top_companies") or [])
         if os.path.exists(COMPANIES_PNG):
-            st.image(COMPANIES_PNG, use_container_width=True)
+            st.image(COMPANIES_PNG, width="stretch")
     with c2:
         st.subheader("Top job titles")
         _stats_table(stats.get("top_job_titles") or [])
         if os.path.exists(JOB_TITLES_PNG):
-            st.image(JOB_TITLES_PNG, use_container_width=True)
+            st.image(JOB_TITLES_PNG, width="stretch")
 
     st.subheader("Top skills")
     _stats_table(stats.get("top_skills") or [])
     if os.path.exists(SKILLS_PNG):
-        st.image(SKILLS_PNG, use_container_width=True)
+        st.image(SKILLS_PNG, width="stretch")
 
 
 _render_statistics()

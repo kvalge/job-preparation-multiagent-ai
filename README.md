@@ -1,8 +1,8 @@
 # Job Preparation Multiagent AI
 
-A multi-agent AI system that helps you prepare for a **specific job application**: paste a job posting and your CV, and the system evaluates fit, analyzes the skill gap against the deadline, builds a prioritized learning plan (with optional real web resources), tailors your CV, and drafts a motivation letter — all grounded in that specific role, not generic advice.
+AI orchestration tool to help you prepare for a **specific job application**: paste a job posting and your CV, and the system evaluates fit, analyzes the skill gap against the deadline, builds a prioritized learning plan (with optional real web resources), tailors your CV, and drafts a motivation letter — all grounded in that specific role, not generic advice.
 
-Built as a portfolio project demonstrating agentic AI system design: multi-agent orchestration, structured outputs, tool use (web search), local persistence, and a resilient pipeline.
+Built as a portfolio project demonstrating AI system design: multi-agent orchestration, structured outputs, tool use (web search), local persistence, and a resilient pipeline.
 
 ## Why this project
 
