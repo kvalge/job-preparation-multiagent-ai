@@ -1,26 +1,26 @@
 Top skills (count / share of job posts mentioning the skill)
-Updated: 2026-07-17
-Total job posts: 6
+Updated: 2026-07-20
+Total job posts: 2
 
 Rank  Name                                       Count     Share
 ----------------------------------------------------------------
-1     Python                                         4     66.7%
-2     SQL                                            4     66.7%
-3     Data Visualization                             3     50.0%
-4     Tableau                                        3     50.0%
-5     Analytical Thinking                            2     33.3%
-6     Attention to Detail                            2     33.3%
-7     Data engineering                               2     33.3%
-8     Database Architecture                          2     33.3%
-9     English Fluency                                2     33.3%
-10    Looker                                         2     33.3%
-11    Ownership                                      2     33.3%
-12    Proactive Problem Solving                      2     33.3%
-13    R                                              2     33.3%
-14    Stakeholder Management                         2     33.3%
-15    2+ years analytics experience                  1     16.7%
-16    A/B testing                                    1     16.7%
-17    AI tools usage                                 1     16.7%
-18    Adaptability                                   1     16.7%
-19    Adaptability in fast-paced environment         1     16.7%
-20    Advanced SQL/Python/R                          1     16.7%
+1     Python                                         2    100.0%
+2     SQL                                            2    100.0%
+3     Analytical Thinking                            1     50.0%
+4     Communication                                  1     50.0%
+5     Data Modeling                                  1     50.0%
+6     Data Pipelines                                 1     50.0%
+7     Data Visualization                             1     50.0%
+8     Data Warehouse                                 1     50.0%
+9     English                                        1     50.0%
+10    English Fluency                                1     50.0%
+11    JavaScript                                     1     50.0%
+12    KPI Design                                     1     50.0%
+13    Metrics Documentation                          1     50.0%
+14    PostgreSQL                                     1     50.0%
+15    Prefect                                        1     50.0%
+16    Problem Solving                                1     50.0%
+17    R                                              1     50.0%
+18    Stakeholder Management                         1     50.0%
+19    Statistical Methods                            1     50.0%
+20    Tableau                                        1     50.0%

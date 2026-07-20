@@ -16,10 +16,25 @@ def load_settings() -> tuple[str, str]:
     return api_key, model
 
 
+def get_fallback_model(primary: str | None = None) -> str | None:
+    """Optional FALLBACK_MODEL from .env, used when the primary model keeps failing.
+
+    Returns None when unset, blank, or identical to the primary model.
+    """
+    load_dotenv()
+    raw = (os.getenv("FALLBACK_MODEL") or "").strip()
+    if not raw:
+        return None
+    if primary is not None and raw == primary.strip():
+        return None
+    return raw
+
+
 def create_client() -> tuple[OpenAI, str]:
-    """Return a configured OpenRouter client and the model name. Raises if unconfigured.
+    """Return a configured OpenRouter client and the primary model name.
 
     Single source of truth for LLM access, shared by the CLI and the UI.
+    Use get_fallback_model(primary) for the optional secondary model.
     """
     api_key, model = load_settings()
     return OpenAI(api_key=api_key, base_url=OPENROUTER_BASE_URL), model

@@ -13,12 +13,16 @@ from utils.llm_json import parse_json_response
 
 JOB_RANKING_SYSTEM_PROMPT = """You help a candidate decide which job application to pursue first.
 
-You are given several job posts the candidate has already analyzed. For each you know:
+You are given one or more job posts the candidate has already analyzed. For each you know:
 - fit verdict (good_fit is best, then stretch_fit, then poor_fit)
 - days_remaining until the application deadline (urgency: fewer days = more urgent, but also less time to close gaps)
 - gap_count and top_gaps (the main missing skills)
 - plan_realistic and plan_total_days: whether the learning plan can realistically be completed, and how many days it needs
 - status ("continued" means worth pursuing, "declined" means it was judged a poor fit and set aside)
+
+IMPORTANT: You MUST include EVERY job_post_id from the input in the ranking array exactly once.
+Never claim that only one job was provided if the input JSON lists more than one.
+If there is only one job, say so; if there are N jobs, rank all N.
 
 Rank the jobs to maximise the candidate's chances. Reward jobs that combine a strong fit
 with gaps that can realistically be closed before the deadline. Penalise jobs whose plan
@@ -39,9 +43,9 @@ Respond ONLY with valid JSON in this exact format, no other text:
     "job_post_id": 0,
     "why": "1-2 sentences on why to start here and what the learning path focus should be"
   },
-  "overall_note": "1-2 sentence overview to help the candidate decide"
+  "overall_note": "1-2 sentence overview that mentions how many jobs were compared"
 }
-Order ranking by rank ascending (1 = best). Include every job you were given exactly once.
+Order ranking by rank ascending (1 = best).
 """
 
 

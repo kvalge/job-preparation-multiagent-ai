@@ -62,9 +62,9 @@ Each agent is a distinct system prompt (and, where relevant, a distinct toolset)
 | **Job Post Extraction Agent** | Extracts structured fields (company, title, salary, location type, deadline, disclaimers, summary, skills) when a posting is saved. |
 | **Match Check Agent** | Evaluates whether the CV is a realistic fit (`good_fit` / `stretch_fit` / `poor_fit`) before deeper analysis. Date-aware for in-progress vs. completed experience. |
 | **Gap Analysis Agent** | Grades skill levels on a 0–4 scale, prioritizes gaps by importance and time-to-learn, and weighs them against days remaining until the deadline. |
-| **Learning Plan Agent** | Turns prioritized gaps into a realistic, time-boxed study plan. Optional OpenRouter web search for resources, with fallback to model knowledge when search is unavailable. |
-| **CV Advisor Agent** | Recommends concrete, truthful CV edits and produces a revised CV. Never fabricates — only reuses facts already in the CV. Date-aware. |
-| **Motivation Letter Agent** | Drafts a concise (under one A4 page), modest letter explaining why the candidate is applying to this company and role. |
+| **Learning Plan Agent** | Turns prioritized gaps into a realistic, time-boxed study plan. Always attempted when the user proceeds past fit. Optional OpenRouter web search for resources, with fallback to model knowledge when search is unavailable. |
+| **CV Advisor Agent** | Recommends concrete, truthful CV edits and produces a revised CV. Always attempted when the user proceeds past fit. Never fabricates — only reuses facts already in the CV. Date-aware. |
+| **Motivation Letter Agent** | Drafts a concise (under one A4 page), modest letter explaining why the candidate is applying to this company and role. Always attempted when the user proceeds past fit. |
 | **Job Ranking Agent** | After each analysis, ranks all analyzed job posts by fit and whether gaps can be closed before each deadline, and recommends which job (and learning path) to pursue first. |
 
 ## Data model
@@ -115,7 +115,11 @@ Text reports: [`statistics/job_titles.txt`](statistics/job_titles.txt) · [`stat
 
 ## Pipeline resilience
 
-Each stage runs through a `run_stage` wrapper so one agent failing (e.g. malformed JSON from a free model) prints a warning and skips that step instead of crashing the whole run. Earlier results and DB writes are preserved; independent steps (CV advisor, motivation letter) still run even if gap analysis or the learning plan fails.
+When you proceed past fit (including poor fit with the proceed toggle on), the pipeline **always aims** to produce a learning plan, revised CV, and motivation letter.
+
+Each LLM stage tries **primary model → one retry → optional `FALLBACK_MODEL`** (from `.env`). Failures are logged to `logs/analysis.log` and recorded in the run result instead of crashing the whole pipeline. Independent stages still continue (e.g. CV and letter still run if the learning plan fails). If gap analysis fails after those attempts, a **fallback** built from the fit-check gaps is used so a learning plan can still be attempted.
+
+If any of the three target outputs is missing, the UI and CLI show a notification and offer **Retry from failed stage**, which resumes from that point without redoing earlier successful work.
 
 ## Privacy
 
@@ -125,7 +129,7 @@ Self-hosted, single-user tool — not a multi-tenant SaaS. CV, job posts, genera
 
 - **Language**: Python
 - **LLM access**: [OpenRouter](https://openrouter.ai/) via the official `openai` Python SDK
-- **Model**: configurable via `.env` (`MODEL=`). Defaults to a free-tier model (see `.env.example`)
+- **Model**: configurable via `.env` (`MODEL=`). Optional `FALLBACK_MODEL=` is used automatically after a primary-model failure and retry.
 - **Web search**: optional OpenRouter web plugin (Learning Plan Agent only); off by default (`ENABLE_WEB_SEARCH`)
 - **Config**: `python-dotenv`
 - **Storage**: SQLite (`data/jobs.db`); text/markdown/JSON under `data/`; public statistics under `statistics/`
@@ -160,8 +164,10 @@ Self-hosted, single-user tool — not a multi-tenant SaaS. CV, job posts, genera
    ```
    API_KEY=your-openrouter-api-key
    MODEL=deepseek/deepseek-chat-v3:free
+   FALLBACK_MODEL=meta-llama/llama-3.3-70b-instruct:free
    ENABLE_WEB_SEARCH=false
    ```
+   `FALLBACK_MODEL` is optional. When set, each LLM stage tries the primary model, retries once, then switches to the fallback model before giving up (useful when a free model returns empty responses or hits rate limits).
 
 4. Install dependencies:
    ```bash
@@ -191,7 +197,8 @@ python run.py ui
 
 - Paste and save/update your CV (each distinct save is versioned).
 - Add multiple job posts (extracted, de-duplicated, saved to SQLite, archived under `data/job_posts/`).
-- Select a saved post and run the full pipeline (fit → gap → learning plan → CV → letter → ranking → statistics), with toggles for **web search** (default off) and **proceed even if poor fit** (default on).
+- Select a saved post and run the full pipeline (fit → gap → learning plan → CV → letter → ranking → statistics), with toggles for **web search** (default off) and **proceed even if poor fit** (default on). When proceeding, the run always aims to create the learning plan, revised CV, and motivation letter.
+- If a stage fails, see the on-page notification / failure list and use **Retry from failed stage** (details also in `logs/analysis.log`).
 - View results inline and download the learning plan, tailored CV, and motivation letter. Each analysis shows which CV version it used.
 - **"Which job to pursue"** ranks analyzed posts by fit and deadline readiness.
 - **Job post statistics**: choose top-N for companies / titles / skills; tables and bar charts on the page; title/skill txt + PNG rewritten under `statistics/`.
@@ -208,11 +215,13 @@ Reads the CV from `data/cv.txt`, then lets you choose a **saved job post** or **
 
 1. Fit verdict (`good_fit` / `stretch_fit` / `poor_fit`)
 2. Gap analysis against the deadline
-3. Learning plan (JSON)
-4. Tailored CV (markdown)
-5. Motivation letter (markdown)
+3. Learning plan (JSON) — always attempted when proceeding
+4. Tailored CV (markdown) — always attempted when proceeding
+5. Motivation letter (markdown) — always attempted when proceeding
 6. Job ranking across analyzed posts
 7. Statistics refresh (txt + PNG diagrams)
+
+If a required stage fails, the CLI prints a notification (and writes `logs/analysis.log`) and asks whether to **retry from that stage**.
 
 `data/job_post.txt` is optional — only used to add a new post. If there are no saved posts and that file is empty, the CLI tells you to add one.
 
@@ -261,8 +270,10 @@ Reads the CV from `data/cv.txt`, then lets you choose a **saved job post** or **
 ├── utils/
 │   ├── date_utils.py
 │   ├── text_utils.py
-│   ├── pipeline.py                  # run_stage()
+│   ├── pipeline.py                  # run_stage() with failure recording
+│   ├── analysis_log.py              # logs/analysis.log helpers
 │   └── llm_json.py
+├── logs/                            # (gitignored) analysis pipeline log
 ├── requirements.txt
 ├── .env.example
 ├── .gitignore

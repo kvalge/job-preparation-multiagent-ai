@@ -67,6 +67,7 @@ def analyze_gaps(
     Grades skill levels (not just yes/no), prioritizes gaps by importance and
     time-to-learn, and weighs them against the days remaining until the deadline.
     Returns a dict following the schema in the system prompt.
+    Retries / FALLBACK_MODEL are handled by the pipeline runner.
     """
     system_prompt = (
         f"{GAP_ANALYSIS_SYSTEM_PROMPT}\n\n"

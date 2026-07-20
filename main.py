@@ -1,12 +1,12 @@
 from openai import OpenAI
 
-from config import create_client, web_search_enabled_default
+from config import create_client, get_fallback_model, web_search_enabled_default
 from data.cv import load_cv
 from data.job_post import load_job_post
 from data.db import init_db, list_job_posts
 from services.cv_service import ensure_cv_version
 from services.job_post_service import add_job_post
-from services.analysis_service import run_analysis
+from services.analysis_service import STAGE_LABELS, run_analysis
 from services.statistics_service import (
     DEFAULT_TOP_COMPANIES,
     DEFAULT_TOP_SKILLS,
@@ -21,7 +21,11 @@ def _post_label(post: dict) -> str:
 
 
 def choose_job_post(
-    client: OpenAI, model: str, posts: list[dict], pending_text: str | None
+    client: OpenAI,
+    model: str,
+    posts: list[dict],
+    pending_text: str | None,
+    fallback_model: str | None = None,
 ) -> int | None:
     """Let the user pick a saved job post, or add a new one from data/job_post.txt.
 
@@ -44,7 +48,15 @@ def choose_job_post(
     if 1 <= n <= len(posts):
         return posts[n - 1]["id"]
     if pending_text and n == new_option:
-        saved = run_stage("Saving job post", add_job_post, client, model, pending_text)
+        saved = run_stage(
+            "Saving job post",
+            add_job_post,
+            client,
+            model,
+            pending_text,
+            fallback_model=fallback_model,
+            model_pos=1,
+        )
         return saved["id"] if saved else None
 
     print("Invalid choice.")
@@ -132,6 +144,61 @@ def print_statistics(stats: dict | None) -> None:
         print(f"Diagrams: {paths.get('job_titles_png')}, {paths.get('skills_png')}")
 
 
+def print_failures(results: dict) -> None:
+    """Print stage failures and the retry hint."""
+    failures = results.get("failures") or []
+    if results.get("notification"):
+        print(f"\n⚠️  {results['notification']}")
+    if failures:
+        print("\nFailed stages:")
+        for f in failures:
+            label = STAGE_LABELS.get(f.get("stage"), f.get("name") or f.get("stage"))
+            print(f"  - {label}: {f.get('error')}")
+        print("  (see logs/analysis.log)")
+    if results.get("gaps_fallback"):
+        print(
+            "\nNote: gap analysis used a fit-check fallback so a learning plan "
+            "could still be attempted."
+        )
+
+
+def offer_retry(
+    client: OpenAI,
+    model: str,
+    cv: str,
+    results: dict,
+) -> dict:
+    """If the run is incomplete, ask whether to retry from the failed stage."""
+    while results.get("incomplete") and results.get("retry_from"):
+        retry_from = results["retry_from"]
+        label = STAGE_LABELS.get(retry_from, retry_from)
+        answer = input(
+            f"\nRetry from failed stage '{label}'? [Y/n]: "
+        ).strip().lower()
+        if answer in ("n", "no"):
+            print("Skipping retry.")
+            break
+
+        print(f"\nRetrying from '{label}'...")
+        results = run_analysis(
+            client,
+            model,
+            results["job_post_id"],
+            cv,
+            results.get("cv_version_id"),
+            use_web_search=bool(results.get("use_web_search", False)),
+            proceed_on_poor_fit=True,
+            top_companies=int(results.get("top_companies", DEFAULT_TOP_COMPANIES)),
+            top_titles=int(results.get("top_titles", DEFAULT_TOP_TITLES)),
+            top_skills=int(results.get("top_skills", DEFAULT_TOP_SKILLS)),
+            fallback_model=results.get("fallback_model") or get_fallback_model(model),
+            resume_from=retry_from,
+            previous_results=results,
+        )
+        print_failures(results)
+    return results
+
+
 def resolve_web_search() -> bool:
     """Let the user enable/disable web search before the run.
 
@@ -150,6 +217,12 @@ def resolve_web_search() -> bool:
 
 def run_cli() -> None:
     client, model = create_client()
+    fallback_model = get_fallback_model(model)
+    if fallback_model:
+        print(f"Primary model: {model}")
+        print(f"Fallback model: {fallback_model}")
+    else:
+        print(f"Primary model: {model} (no FALLBACK_MODEL set)")
 
     cv = load_cv()
     if cv is None:
@@ -165,7 +238,9 @@ def run_cli() -> None:
             "web UI, or paste one into data/job_post.txt and run again."
         )
 
-    job_post_id = choose_job_post(client, model, posts, pending_text)
+    job_post_id = choose_job_post(
+        client, model, posts, pending_text, fallback_model=fallback_model
+    )
     if job_post_id is None:
         print("Nothing selected. Stopping.")
         return
@@ -185,7 +260,10 @@ def run_cli() -> None:
         top_companies=top_companies,
         top_titles=top_titles,
         top_skills=top_skills,
+        fallback_model=fallback_model,
     )
+    print_failures(results)
+    results = offer_retry(client, model, cv, results)
 
     fit = results.get("fit")
     if fit is None:
@@ -226,15 +304,21 @@ def run_cli() -> None:
         for item in plan["items"]:
             print(f"  {item['priority']}. {item['skill']} (~{item['estimated_days']}d)")
         print(f"Saved learning plan to {results.get('plan_path')}")
+    else:
+        print("\nLearning plan was not created.")
 
     if results.get("cv_path"):
         print(f"\nSaved tailored CV to {results['cv_path']}")
+    else:
+        print("\nRevised CV was not created.")
 
     letter = results.get("letter")
     if letter is not None:
         print("\nMotivation letter:\n")
         print(letter["motivation_letter"])
         print(f"\nSaved motivation letter to {results.get('letter_path')}")
+    else:
+        print("\nMotivation letter was not created.")
 
     print_ranking(results.get("ranking"))
     print_statistics(results.get("statistics"))

@@ -3,10 +3,10 @@ import os
 
 import streamlit as st
 
-from config import create_client, web_search_enabled_default
+from config import create_client, get_fallback_model, web_search_enabled_default
 from data.cv import load_cv
 from data.db import get_cv_version, get_job_post, init_db, list_job_posts
-from services.analysis_service import run_analysis
+from services.analysis_service import STAGE_LABELS, run_analysis
 from services.cv_service import ensure_cv_version, save_cv_with_version
 from services.job_post_service import add_job_post
 from services.ranking_service import load_latest_ranking
@@ -28,8 +28,9 @@ st.session_state.setdefault("analysis", {})
 
 try:
     client, model = create_client()
+    fallback_model = get_fallback_model(model)
 except ValueError:
-    client, model = None, None
+    client, model, fallback_model = None, None, None
 
 st.title("Job Preparation Multiagent AI")
 st.caption(
@@ -72,6 +73,13 @@ st.caption(
 if client is None or model is None:
     st.error("Set API_KEY and MODEL in your .env file to add and analyze job posts.")
 else:
+    if fallback_model:
+        st.caption(f"Primary model: `{model}` · Fallback model: `{fallback_model}`")
+    else:
+        st.caption(
+            f"Primary model: `{model}` · "
+            "Optional `FALLBACK_MODEL` not set in `.env`."
+        )
     with st.form("add_job_post", clear_on_submit=True):
         job_post_text = st.text_area(
             "Job post text",
@@ -127,10 +135,88 @@ def _post_label(post: dict) -> str:
     return f"#{post['id']} · {name}"
 
 
+def _render_failures_and_retry(
+    results: dict,
+    *,
+    post_id: int,
+    detail: dict,
+    client,
+    model: str,
+) -> None:
+    """Show failure notifications and a button to resume from the failed stage."""
+    failures = results.get("failures") or []
+    notification = results.get("notification")
+    retry_from = results.get("retry_from")
+
+    if notification:
+        if results.get("incomplete"):
+            st.error(notification)
+        else:
+            st.info(notification)
+
+    if failures:
+        with st.expander(f"Stage failures ({len(failures)})", expanded=bool(retry_from)):
+            for f in failures:
+                label = STAGE_LABELS.get(f.get("stage"), f.get("name") or f.get("stage"))
+                st.markdown(f"- **{label}**: `{f.get('error')}`")
+            st.caption("Full log: `logs/analysis.log`")
+
+    if results.get("gaps_fallback"):
+        st.warning(
+            "Gap analysis failed — a fallback from the fit-check gaps was used so a "
+            "learning plan could still be built. Retry gap analysis for a fuller result."
+        )
+
+    if not retry_from:
+        return
+
+    label = STAGE_LABELS.get(retry_from, retry_from)
+    if st.button(
+        f"Retry from failed stage: {label}",
+        type="primary",
+        key=f"retry_{post_id}_{retry_from}",
+    ):
+        cv = load_cv()
+        if not cv:
+            st.error("Save your CV first (above) before retrying.")
+            return
+        cv_version_id = results.get("cv_version_id") or ensure_cv_version(cv)
+        with st.spinner(f"Retrying from '{label}'..."):
+            try:
+                new_results = run_analysis(
+                    client,
+                    model,
+                    post_id,
+                    cv,
+                    cv_version_id,
+                    use_web_search=bool(results.get("use_web_search", False)),
+                    proceed_on_poor_fit=True,
+                    top_companies=int(
+                        results.get("top_companies", DEFAULT_TOP_COMPANIES)
+                    ),
+                    top_titles=int(results.get("top_titles", DEFAULT_TOP_TITLES)),
+                    top_skills=int(results.get("top_skills", DEFAULT_TOP_SKILLS)),
+                    fallback_model=results.get("fallback_model") or fallback_model,
+                    resume_from=retry_from,
+                    previous_results=results,
+                )
+                st.session_state["analysis"][post_id] = new_results
+                print(
+                    f"[ui] Retry from '{retry_from}' complete for {_post_label(detail)} "
+                    f"(incomplete={new_results.get('incomplete')})."
+                )
+                st.rerun()
+            except Exception as e:
+                st.error(f"Retry failed: {e}")
+
+
 def _render_results(results: dict) -> None:
     fit = results.get("fit")
     if fit is None:
-        st.error("Fit evaluation failed — see the terminal log for details.")
+        st.error(
+            results.get("notification")
+            or "Fit evaluation failed — see logs/analysis.log and use Retry."
+        )
         return
 
     verdict = fit.get("verdict", "unknown")
@@ -154,12 +240,18 @@ def _render_results(results: dict) -> None:
         st.caption(f"Evaluated against CV version {cv_version_id} (saved {saved_at}).")
 
     if results.get("status") == "declined":
-        st.warning("Stopped after fit evaluation (poor fit).")
+        st.warning(
+            results.get("notification")
+            or "Stopped after fit evaluation (poor fit)."
+        )
         return
 
     gaps = results.get("gaps")
     if gaps is not None:
-        st.subheader(f"Skill gaps ({results.get('days_remaining', '?')} days until deadline)")
+        title = f"Skill gaps ({results.get('days_remaining', '?')} days until deadline)"
+        if results.get("gaps_fallback"):
+            title += " — fallback"
+        st.subheader(title)
         st.write(gaps.get("overall_summary", ""))
         for gap in gaps.get("prioritized_gaps", []):
             fit_note = "achievable" if gap.get("achievable_before_deadline") else "tight"
@@ -168,6 +260,8 @@ def _render_results(results: dict) -> None:
                 f"[{gap['importance']}] · ~{gap['estimated_days_to_learn']}d ({fit_note})"
             )
             st.markdown(f"  {gap['recommendation']}")
+    else:
+        st.warning("Skill gaps not available yet.")
 
     plan = results.get("plan")
     if plan is not None:
@@ -192,6 +286,8 @@ def _render_results(results: dict) -> None:
                 mime="application/json",
                 key=f"dl_plan_{results['job_post_id']}",
             )
+    else:
+        st.warning("Learning plan was not created yet.")
 
     advice = results.get("cv")
     if advice is not None:
@@ -208,6 +304,8 @@ def _render_results(results: dict) -> None:
                 mime="text/markdown",
                 key=f"dl_cv_{results['job_post_id']}",
             )
+    else:
+        st.warning("Revised CV was not created yet.")
 
     letter = results.get("letter")
     if letter is not None:
@@ -221,6 +319,8 @@ def _render_results(results: dict) -> None:
                 mime="text/markdown",
                 key=f"dl_letter_{results['job_post_id']}",
             )
+    else:
+        st.warning("Motivation letter was not created yet.")
 
 
 if posts and client is not None and model is not None:
@@ -295,18 +395,24 @@ if posts and client is not None and model is not None:
                         top_companies=int(top_companies),
                         top_titles=int(top_titles),
                         top_skills=int(top_skills),
+                        fallback_model=fallback_model,
                     )
                     st.session_state["analysis"][post_id] = results
                     label = _post_label(detail)
                     print(
                         f"[ui] Analysis complete for {label} "
-                        f"(status={results.get('status')}). Results shown in the browser."
+                        f"(status={results.get('status')}, "
+                        f"incomplete={results.get('incomplete')}). "
+                        "Results shown in the browser."
                     )
                 except Exception as e:
                     st.error(f"Analysis failed: {e}")
 
     cached = st.session_state["analysis"].get(post_id)
     if cached is not None:
+        _render_failures_and_retry(
+            cached, post_id=post_id, detail=detail, client=client, model=model
+        )
         _render_results(cached)
 
 
@@ -317,11 +423,25 @@ def _render_ranking() -> None:
         return
 
     st.header("Which job to pursue")
+    analyzed_n = ranking.get("analyzed_count")
+    ranked_n = ranking.get("ranked_count")
     st.caption(
         "Ranked across all analyzed job posts by fit and how realistically the gaps "
         "can be closed before each deadline. Refreshed after every analysis"
         + (f" (last updated {ranking['created_at']})." if ranking.get("created_at") else ".")
+        + (
+            f" Showing {ranked_n} of {analyzed_n} analyzed posts."
+            if analyzed_n is not None
+            else ""
+        )
     )
+
+    if ranking.get("stale"):
+        st.warning(
+            "This ranking is out of date — it does not include every analyzed job post "
+            "(often because a later ranking model call failed). Re-run analysis on any "
+            "post, or use Retry from ranking if shown above."
+        )
 
     labels = {p["id"]: _post_label(p) for p in list_job_posts()}
 
@@ -341,6 +461,9 @@ def _render_ranking() -> None:
 
     if ranking.get("overall_note"):
         st.info(ranking["overall_note"])
+
+    if ranking.get("_fallback"):
+        st.caption("Ranked with a rule-based fallback (ranking model call was unavailable).")
 
 
 _render_ranking()
